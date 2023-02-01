@@ -1,7 +1,10 @@
 {
   "greet": {
-    "dockerfile": "./multiple/greet.dockerfile",
-    "context": "./multiple",
+    "dockerfile": "./multiple/all.dockerfile",
+    "docker_build_context": "./multiple",
+    "docker_build_args": {
+      "SCRIPT": "./greet.py"
+    },
     "inputs": {
       "name": "utf8-string"
     },
@@ -14,25 +17,15 @@
       "timeout_seconds": 1
     }
   },
-  "show": {
-    "dockerfile": "./multiple/show.dockerfile",
-    "context": "./multiple",
-    "inputs": {
-      "name": "utf8-string"
-    },
-    "outputs": {},
-    "hardware": "todo",
-    "scaling": "todo",
-    "healthcheck": {
-      "timeout_seconds": 1
-    }
-  },
   "source": {
-    "dockerfile": "./multiple/hardcoded_source.dockerfile",
-    "context": "./multiple",
+    "dockerfile": "./multiple/all.dockerfile",
+    "docker_build_context": "./multiple",
+    "docker_build_args": {
+      "SCRIPT": "./source.py"
+    },
     "inputs": {},
     "outputs": {
-      "some_numbers": "u32"
+      "some_strings": "utf8-string"
     },
     "hardware": "todo",
     "scaling": "todo",

@@ -24,13 +24,6 @@ Two peices of data define a dagyo program:
   - A relative path to the the dockerfile for this progdef.
   - healthcheck-timeout
 
-All progdefs have two implicit outputs (in addition to the ones specified in metadata):
-- "dagyo:panic" - indicates the job has failed, by default the Dagyo Sheduler will kill and cleanup the entire flow.
-- "dagyo:healthy" - indicates the job is still running, if a job does not output to this stream for the specified period, the Dagyo Scheduler will kill and cleanup the entire flow.
-
-Progdefs have one implicit input (in addition to the ones specified in metadata):
-- "dagyo:stop" - if a job receives a message on this stream, it should stop this job and cleanup.
-
 ## Dagyo Flow
 
 A running data flow tree. Resources allocated to the flow include Daggo Executors and job 
@@ -38,6 +31,13 @@ A running data flow tree. Resources allocated to the flow include Daggo Executor
 ## Dagyo Job
 
 A runnable instance of a progdef. Dagyo Job are serialized and stored in a queue that Executors pull from. A job describes where to pull inputs, and where to push outputs.
+
+In addition to the custom outputs specified by a job's Progdef. Jobs are provided with two additional outputs:
+- "panic" - indicates the job has failed, by default the Dagyo Sheduler will kill and cleanup the entire flow.
+- "health" - indicates the job is still running, if a job does not output to this stream for the specified period, the Dagyo Scheduler will kill and cleanup the entire flow.
+
+In addition to the custom inputs specified by a job's Progdef. Jobs are provided with one additional input:
+- "stop" - if a job receives a message on this stream, it should stop this job and cleanup.
 
 ## Dagyo Executor
 

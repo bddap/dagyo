@@ -3,15 +3,35 @@
 
 RABBITMQ_PORT := "5672"
 RABBITMQ_HOSTNAME := "dagyorabbitmq"
+GREET_JOBS := "greetfakejobid"
+SOURCE_JOBS := "sourcefakejobid"
 
 rabbitmq:
-    docker run --hostname {{ RABBITMQ_HOSTNAME }} -p {{ RABBITMQ_PORT }}:5672 --rm rabbitmq
+    docker run --name {{ RABBITMQ_HOSTNAME }} -p {{ RABBITMQ_PORT }}:5672 --rm rabbitmq
 
 greet:
     #!/bin/bash
     set -ueo pipefail
-    docker build . --file greet.dockerfile
+
+    dbuild_args="--build-arg SCRIPT=./greet.py --file all.dockerfile ."
+
+    docker build $dbuild_args
     docker run \
-        -e DAGYO_JOB="fakejobid" \
+        -e DAGYO_JOBS={{ GREET_JOBS }} \
         -e DAGYO_QUEUE="amqp://guest:guest@{{ RABBITMQ_HOSTNAME }}:{{ RABBITMQ_PORT }}/" \
-        --rm $(docker build -q . --file greet.dockerfile)
+        --link {{ RABBITMQ_HOSTNAME }}:{{ RABBITMQ_HOSTNAME }} \
+        --rm $(docker build -q $dbuild_args)
+
+source:
+    #!/bin/bash
+    set -ueo pipefail
+
+    dbuild_args="--build-arg SCRIPT=./source.py --file all.dockerfile ."
+
+    docker build $dbuild_args
+    docker run \
+        -e DAGYO_JOBS={{ SOURCE_JOBS }} \
+        -e DAGYO_QUEUE="amqp://guest:guest@{{ RABBITMQ_HOSTNAME }}:{{ RABBITMQ_PORT }}/" \
+        --link {{ RABBITMQ_HOSTNAME }}:{{ RABBITMQ_HOSTNAME }} \
+        --rm $(docker build -q $dbuild_args)
+

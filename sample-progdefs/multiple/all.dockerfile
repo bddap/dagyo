@@ -1,5 +1,7 @@
 FROM python:3.10
 
+ARG SCRIPT
+
 RUN mkdir /app
 WORKDIR /app
 
@@ -10,5 +12,6 @@ RUN pip3 install poetry \
 	&& poetry install --no-dev
 
 COPY . .
+RUN [ -f $SCRIPT ]
 
-ENTRYPOINT ["python", "./greet.py"]
+ENTRYPOINT python $SCRIPT
