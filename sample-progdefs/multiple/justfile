@@ -1,0 +1,17 @@
+# these recipies will be removed once the sheduler is working
+# they are currently being used for for bootstrapping the scheduler
+
+RABBITMQ_PORT := "5672"
+RABBITMQ_HOSTNAME := "dagyorabbitmq"
+
+rabbitmq:
+    docker run --hostname {{ RABBITMQ_HOSTNAME }} -p {{ RABBITMQ_PORT }}:5672 --rm rabbitmq
+
+greet:
+    #!/bin/bash
+    set -ueo pipefail
+    docker build . --file greet.dockerfile
+    docker run \
+        -e DAGYO_JOB="fakejobid" \
+        -e DAGYO_QUEUE="amqp://guest:guest@{{ RABBITMQ_HOSTNAME }}:{{ RABBITMQ_PORT }}/" \
+        --rm $(docker build -q . --file greet.dockerfile)

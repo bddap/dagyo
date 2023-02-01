@@ -94,7 +94,8 @@ Timeouts. No support for streaming. No support for GPU acceleration. No support 
 # What sort of message broker do we need?
 
 - Serialization: as long as messages can be byte arrays, that will be enough.
-- We need the ability for an executor to pull exactly one job such that no other executor can pull the same message. FIFO is not strictly needed for job queue, but any message broker claiming to support FIFO should work.
+- We need the ability for an executor to pull exactly one job such that no other executor can pull the same message. This pattern is called [Competing Consumers](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html).
 - Need strict ordering for of messages in a given stream. Don't need strict ordering across streams.
 - Need to be able to delete mailboxes on cleanup.
 
+RabbitMQ has nice tutorials: https://www.rabbitmq.com/getstarted.html

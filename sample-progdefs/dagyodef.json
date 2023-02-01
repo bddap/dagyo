@@ -1,0 +1,43 @@
+{
+  "greet": {
+    "dockerfile": "./multiple/greet.dockerfile",
+    "context": "./multiple",
+    "inputs": {
+      "name": "utf8-string"
+    },
+    "outputs": {
+      "greeting": "utf8-string"
+    },
+    "hardware": "todo",
+    "scaling": "todo",
+    "healthcheck": {
+      "timeout_seconds": 1
+    }
+  },
+  "show": {
+    "dockerfile": "./multiple/show.dockerfile",
+    "context": "./multiple",
+    "inputs": {
+      "name": "utf8-string"
+    },
+    "outputs": {},
+    "hardware": "todo",
+    "scaling": "todo",
+    "healthcheck": {
+      "timeout_seconds": 1
+    }
+  },
+  "source": {
+    "dockerfile": "./multiple/hardcoded_source.dockerfile",
+    "context": "./multiple",
+    "inputs": {},
+    "outputs": {
+      "some_numbers": "u32"
+    },
+    "hardware": "todo",
+    "scaling": "todo",
+    "healthcheck": {
+      "timeout_seconds": 1
+    }
+  }
+}
