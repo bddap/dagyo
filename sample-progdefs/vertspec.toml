@@ -1,0 +1,12 @@
+[greet]
+dockerfile = "./multiple/all.dockerfile"
+docker_build_context = "./multiple"
+docker_build_args.SCRIPT = "./greet.py"
+inputs.name = "utf8-string"
+outputs.greeting = "utf8-string"
+
+[source]
+dockerfile = "./multiple/all.dockerfile"
+docker_build_context = "./multiple"
+docker_build_args.SCRIPT = "./source.py"
+outputs.some_strings = "utf8-string"
