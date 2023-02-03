@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
+    fmt::{Debug, Formatter},
     path::{Path, PathBuf},
 };
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct VertSpec {
@@ -41,6 +43,56 @@ impl VertSpec {
         self.docker_build_context = base.join(&self.docker_build_context).canonicalize()?;
         Ok(())
     }
+
+    /// a hash that uniquely identifies this vertspecs build
+    pub fn content_hash(&self, build_context_tarred: &[u8]) -> ProgdefHash {
+        let mut hasher = Sha256::new();
+        hasher.update(stable_map_hash(&self.docker_build_args));
+        hasher.update(stable_map_hash(&self.inputs));
+        hasher.update(stable_map_hash(&self.outputs));
+        hasher.update(build_context_tarred);
+        ProgdefHash {
+            hash: hasher.finalize().into(),
+        }
+    }
+}
+
+pub struct ProgdefHash {
+    hash: [u8; 32],
+}
+
+impl Debug for ProgdefHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ProgdefHash({})", self.hex())
+    }
+}
+
+impl ProgdefHash {
+    pub fn image_name(&self) -> String {
+        // docker specifically rejects 64 character hex strings so we add a prefix
+        format!("dagyo_executor_{}", self.hex())
+    }
+
+    pub fn hex(&self) -> String {
+        self.hash.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+}
+
+/// hash where if map a == map b then hash a == hash b, this ensures that keys are sorted
+fn stable_map_hash(map: &HashMap<String, String>) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    let mut keys: Vec<(&str, &str)> = map.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    keys.sort();
+    let js = serde_json::to_vec(&keys).unwrap();
+    hasher.update(js);
+    hasher.finalize().into()
+}
+
+#[derive(Debug)]
+pub struct Built {
+    pub spec: VertSpec,
+    pub progdef_hash: ProgdefHash,
+    pub name_for_humans: String,
 }
 
 fn default_build_context() -> PathBuf {

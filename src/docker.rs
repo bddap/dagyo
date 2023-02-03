@@ -1,17 +1,14 @@
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use bollard::Docker;
 use futures::TryStreamExt;
-use sha2::{Digest, Sha256};
 
-use crate::vertspec::VertSpec;
+use crate::vertspec::{ProgdefHash, VertSpec};
 
-pub type ImageName = String;
-
-pub async fn build_docker_image(vs: &VertSpec) -> anyhow::Result<ImageName> {
+pub async fn build_docker_image(vs: &VertSpec) -> anyhow::Result<ProgdefHash> {
     let docker = Docker::connect_with_local_defaults()?;
     let tar = tarchive(&vs.docker_build_context, &vs.dockerfile)?;
-    let tarh = hash(&tar, &vs.docker_build_args);
+    let progdef_hash = vs.content_hash(&tar);
 
     let buildargs = vs
         .docker_build_args
@@ -22,7 +19,7 @@ pub async fn build_docker_image(vs: &VertSpec) -> anyhow::Result<ImageName> {
     let options = bollard::image::BuildImageOptions {
         dockerfile: "Dockerfile",
         buildargs,
-        t: &tarh.clone(),
+        t: &progdef_hash.image_name(),
         ..Default::default()
     };
     let mut stream = docker.build_image(options, None, Some(tar.into()));
@@ -31,7 +28,7 @@ pub async fn build_docker_image(vs: &VertSpec) -> anyhow::Result<ImageName> {
             eprint!("{}", stream);
         }
     }
-    Ok(tarh)
+    Ok(progdef_hash)
 }
 
 /// currently does not heed .dockerignore
@@ -49,19 +46,4 @@ fn tarchive(docker_build_context: &Path, dockerfile: &Path) -> anyhow::Result<Ve
     archive.append_path_with_name(dockerfile, "Dockerfile")?;
     let archive = archive.into_inner()?;
     Ok(archive)
-}
-
-fn hash(preimage: &[u8], build_args: &HashMap<String, String>) -> String {
-    let mut sorted = build_args.iter().collect::<Vec<_>>();
-    sorted.sort();
-    let build_args_serialized = serde_json::to_vec(&sorted).unwrap();
-
-    let mut hasher = Sha256::new();
-    hasher.update(&preimage);
-    hasher.update(&build_args_serialized);
-    let hash = hasher.finalize();
-
-    // docker specifcally can't handle 64-byte hexidecimal strings, so we prepend
-    // some characters
-    format!("dagyo_executor_{:x}", hash)
 }
