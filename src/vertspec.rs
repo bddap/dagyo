@@ -28,7 +28,7 @@ impl VertSpec {
     /// paths returned are canonical and absolute
     pub fn from_file(path: &Path) -> anyhow::Result<HashMap<String, Self>> {
         let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let vertspec_file = std::fs::read_to_string(&path).with_context(|| {
+        let vertspec_file = std::fs::read_to_string(path).with_context(|| {
             format!("failed to read vertspec file at {}", path.to_string_lossy())
         })?;
         let mut vertspec: HashMap<String, VertSpec> = toml::from_str(&vertspec_file)?;
