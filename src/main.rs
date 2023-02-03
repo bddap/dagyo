@@ -26,7 +26,7 @@ async fn inner_main() -> anyhow::Result<()> {
     }
     eprintln!("image tags: {:#?}", &image_tags);
 
-    // and spin up a docker container each image
+    // and spin up a docker container for each image
     // https://levelup.gitconnected.com/two-easy-ways-to-use-local-docker-images-in-minikube-cd4dcb1a5379
 
     // manually connect source to greet and greet to some output

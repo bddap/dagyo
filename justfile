@@ -52,3 +52,7 @@ run-sample:
     export DAGYO_QUEUE="amqp://guest:guest@{{ AMPQ_HOSTNAME }}:{{ AMPQ_PORT }}/"
     export DAGYO_VERTS="./sample-progdefs/vertspec.toml"
     cargo run
+
+start-local-cluster:
+    minikube start --container-runtime=containerd
+
