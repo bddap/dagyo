@@ -63,18 +63,22 @@ pub struct ProgdefHash {
 
 impl Debug for ProgdefHash {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ProgdefHash({})", self.hex())
+        write!(f, "ProgdefHash({})", self.shorthex())
     }
 }
 
 impl ProgdefHash {
     pub fn image_name(&self) -> String {
-        // docker specifically rejects 64 character hex strings so we add a prefix
-        format!("dagyo_executor_{}", self.hex())
+        // fyi docker specifically rejects 64 character hex strings
+        format!("dagyo_{}", self.shorthex())
     }
 
-    pub fn hex(&self) -> String {
-        self.hash.iter().map(|b| format!("{:02x}", b)).collect()
+    pub fn shorthex(&self) -> String {
+        self.hash
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .take(16)
+            .collect()
     }
 }
 

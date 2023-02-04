@@ -15,7 +15,11 @@ pub struct Opts {
     /// Kubernetes namespace to use for this deployment, multiple instances of dagyo can
     /// be run on the same cluster as long as they use different namespaces.
     #[clap(short, long, env = "DAGYO_KUBE_NAMESPACE", default_value = "dagyo")]
-    pub namespace: Namespace,
+    pub namespace: KubeNamespace,
+
+    /// Whether we are running everything locally.
+    #[clap(short, long, env = "DAGYO_LOCAL", default_value = "false")]
+    pub local: bool,
 }
 
 /// Valid custom namespaces:
@@ -26,15 +30,15 @@ pub struct Opts {
 ///   end with an alphanumeric character
 ///   should not start with 'kube-'
 #[derive(Clone)]
-pub struct Namespace(String);
+pub struct KubeNamespace(String);
 
-impl Namespace {
+impl KubeNamespace {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
 }
 
-impl FromStr for Namespace {
+impl FromStr for KubeNamespace {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> anyhow::Result<Self> {
@@ -67,7 +71,7 @@ impl FromStr for Namespace {
     }
 }
 
-impl Debug for Namespace {
+impl Debug for KubeNamespace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }

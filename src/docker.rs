@@ -25,7 +25,7 @@ pub async fn build_docker_image(vs: &VertSpec) -> anyhow::Result<ProgdefHash> {
     let mut stream = docker.build_image(options, None, Some(tar.into()));
     while let Some(item) = stream.try_next().await? {
         if let Some(stream) = item.stream {
-            eprint!("{}", stream);
+            tracing::debug!("{}", stream.trim_end_matches('\n'));
         }
     }
     Ok(progdef_hash)

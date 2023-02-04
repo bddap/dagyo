@@ -51,6 +51,7 @@ run-sample:
     
     export DAGYO_QUEUE="amqp://guest:guest@{{ AMPQ_HOSTNAME }}:{{ AMPQ_PORT }}/"
     export DAGYO_VERTS="./sample-progdefs/vertspec.toml"
+    export DAGYO_LOCAL="true"
     cargo run
 
 start-local-cluster:

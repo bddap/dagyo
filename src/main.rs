@@ -1,3 +1,5 @@
+use std::{process::Command, str::from_utf8};
+
 use clap::Parser;
 use dagyo::{
     config::Opts,
@@ -5,14 +7,19 @@ use dagyo::{
     kubestuff,
     vertspec::{Built, VertSpec},
 };
+use tracing::info;
 
-async fn inner_main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+
     let opts = Opts::parse();
     let vertspecs = VertSpec::from_file(&opts.vertspec)?;
 
     // build docker images for each progdef
     let mut verts = Vec::new();
     for (name_for_humans, spec) in vertspecs {
+        info!("building docker image for {}", name_for_humans);
         let progdef_hash = build_docker_image(&spec).await?;
         verts.push(Built {
             spec,
@@ -20,27 +27,47 @@ async fn inner_main() -> anyhow::Result<()> {
             name_for_humans,
         });
     }
-    eprintln!("image tags: {:#?}", &verts);
+
+    if opts.local {
+        // This part is a little hacky for now.
+        // This code takes the images se just built from our local docker daemon and make them available to minikube.
+        // Need to find a faster way to do this. I takes forever.
+
+        info!("loading images into minikube");
+
+        let current_images = Command::new("minikube")
+            .arg("image")
+            .arg("ls")
+            .stdout(std::process::Stdio::piped())
+            .output()?
+            .stdout;
+        let current_images: &str = from_utf8(&current_images)?;
+
+        for vert in &verts {
+            let image_name = vert.progdef_hash.image_name();
+            if current_images.contains(&image_name) {
+                info!("image {} already loaded", image_name);
+                continue;
+            }
+            info!("loading image: {}", &image_name);
+            Command::new("minikube")
+                .arg("image")
+                .arg("load")
+                .arg(image_name)
+                .output()?;
+        }
+    }
 
     // and spin up a docker container for each image
     // https://levelup.gitconnected.com/two-easy-ways-to-use-local-docker-images-in-minikube-cd4dcb1a5379
-    let _cluster = kubestuff::define_cluster(&opts, &verts);
-    // kubestuff::set_cluster(&verts, &opts.queue).await?;
-    // let client = kube::Client::try_default().await?;
-    // .apply(&kube::api::PostParams::default(), &kube::api::List::new(vec![]))
-    // .await?;
+    info!("spinning up containers");
+    let cluster = kubestuff::Cluster::from_verts(&opts, &verts);
+    cluster.apply().await?;
+    info!("spun up containers");
 
     // manually connect source to greet and greet to some output
 
     // read from the output and print it
 
     Ok(())
-}
-
-#[tokio::main]
-async fn main() {
-    if let Err(e) = inner_main().await {
-        eprintln!("{:?}", e);
-        std::process::exit(1);
-    }
 }
