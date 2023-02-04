@@ -5,7 +5,6 @@ import time
 
 @asyncmain
 async def main() -> None:
-    print("Hello, world!")
-    time.sleep(10000)
+    eprint("Greet Starting..")
     async for job in common.jobs():
         eprint(job)

@@ -4,13 +4,15 @@ use crate::{
     config::{KubeNamespace, Opts},
     vertspec::Built,
 };
-use anyhow::Context;
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
-        core::v1::{Container, ContainerPort, EnvVar, Namespace, Pod, PodSpec, PodTemplateSpec},
+        core::v1::{
+            Container, ContainerPort, EnvVar, Namespace, Pod, PodSpec, PodTemplateSpec, Service,
+            ServicePort, ServiceSpec,
+        },
     },
-    apimachinery::pkg::apis::meta::v1::LabelSelector,
+    apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
     NamespaceResourceScope,
 };
 use kube::{
@@ -26,10 +28,12 @@ pub struct Cluster {
     namespace: KubeNamespace,
     deployments: Vec<Deployment>,
     pods: Vec<Pod>,
+    services: Vec<Service>,
 }
 
 const MQ_HOSTNAME: &str = "dagyo-mq";
-const MQ_URL: &str = "amqp://guest:guest@dagyo-mq:5672";
+const MQ_URL: &str = "amqp://guest:guest@dagyo-mq:443";
+const MQ_PORT: u16 = 5672;
 
 impl Cluster {
     /// Set the desired state of the cluster. Prune any resources in self.namespace that are not specified in self.
@@ -38,15 +42,13 @@ impl Cluster {
 
         ensure_namespace(&client, &self.namespace).await?;
 
-        self.apply_resources(&client, &self.deployments)
-            .await
-            .context("applying")?;
-        self.prune(&client, &self.deployments)
-            .await
-            .context("pruning")?;
-
+        self.apply_resources(&client, &self.deployments).await?;
         self.apply_resources(&client, &self.pods).await?;
+        self.apply_resources(&client, &self.services).await?;
+
+        self.prune(&client, &self.deployments).await?;
         self.prune(&client, &self.pods).await?;
+        self.prune(&client, &self.services).await?;
 
         Ok(())
     }
@@ -96,22 +98,22 @@ impl Cluster {
 
         let mut deployments = Vec::new();
         for vert in verts {
-            let deployment = as_deployment(vert, opts);
-            deployments.push(deployment);
+            deployments.push(as_deployment(vert, opts));
         }
 
         let pods = vec![Pod {
             metadata: ObjectMeta {
-                name: Some(MQ_HOSTNAME.to_string()),
+                name: Some("dagyo-mq-pod".to_string()),
                 namespace: Some(opts.namespace.as_str().to_string()),
+                labels: Some([("app".to_string(), "dagyo-mq".to_string())].into()),
                 ..Default::default()
             },
             spec: Some(PodSpec {
                 containers: vec![Container {
-                    name: "dagyo-mq".to_string(),
+                    name: "dagyo-mq-container".to_string(),
                     image: Some("rabbitmq:3.11".to_string()),
                     ports: Some(vec![ContainerPort {
-                        container_port: 5672,
+                        container_port: MQ_PORT.into(),
                         ..Default::default()
                     }]),
                     ..Default::default()
@@ -121,10 +123,30 @@ impl Cluster {
             status: None,
         }];
 
+        let services = vec![Service {
+            metadata: ObjectMeta {
+                name: Some(MQ_HOSTNAME.to_string()),
+                namespace: Some(opts.namespace.as_str().to_string()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                selector: Some([("app".to_string(), "dagyo-mq".to_string())].into()),
+                ports: Some(vec![ServicePort {
+                    port: MQ_PORT.into(),
+                    target_port: Some(IntOrString::Int(MQ_PORT.into())),
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+
         Self {
             namespace: opts.namespace.clone(),
             deployments,
             pods,
+            services,
         }
     }
 
@@ -145,7 +167,7 @@ impl Cluster {
 
         let list = api
             .list(&ListParams {
-                label_selector: Some("dagyo_will_prune=yes".to_string()),
+                label_selector: Some("dagyo_will_prune".to_string()),
                 ..Default::default()
             })
             .await?;
@@ -205,7 +227,7 @@ fn as_deployment(vert: &Built, opts: &Opts) -> Deployment {
     };
     let labels: BTreeMap<String, String> = [("dagyo_executor".to_string(), "a".to_string())].into();
     let deployment_spec = DeploymentSpec {
-        replicas: Some(1),
+        replicas: Some(2),
         template: PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),

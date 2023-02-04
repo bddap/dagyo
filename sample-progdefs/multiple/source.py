@@ -1,5 +1,5 @@
 import common
-from common import asyncmain, OutStream, Job
+from common import asyncmain, OutStream, Job, eprint
 from dataclasses import dataclass
 
 NAMES = [
@@ -51,6 +51,7 @@ async def run(job: Job) -> None:
 
 @asyncmain
 async def main() -> None:
+    eprint("Source Starting")
     async for job in common.jobs():
         async with job:
             await run(job)
