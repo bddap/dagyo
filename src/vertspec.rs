@@ -8,7 +8,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct VertSpec {
     #[serde(default = "default_dockerfile")]
     pub dockerfile: PathBuf,
@@ -57,6 +57,7 @@ impl VertSpec {
     }
 }
 
+#[derive(Clone)]
 pub struct ProgdefHash {
     hash: [u8; 32],
 }
@@ -92,8 +93,8 @@ fn stable_map_hash(map: &HashMap<String, String>) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-#[derive(Debug)]
-pub struct Built {
+#[derive(Debug, Clone)]
+pub struct Progdef {
     pub spec: VertSpec,
     pub progdef_hash: ProgdefHash,
     pub name_for_humans: String,

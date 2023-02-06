@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt::Debug};
 
 use crate::{
     config::{KubeNamespace, Opts},
-    vertspec::Built,
+    vertspec::Progdef,
 };
 use k8s_openapi::{
     api::{
@@ -91,7 +91,7 @@ impl Cluster {
         Ok(())
     }
 
-    pub fn from_verts(opts: &Opts, verts: &[Built]) -> Self {
+    pub fn from_verts(opts: &Opts, verts: &[Progdef]) -> Self {
         // will likely need to set the hostname field of the pod spec
         // might neet to set file:///home/a/d/dagyo/target/doc/k8s_openapi/api/core/v1/struct.PodSpec.html#structfield.set_hostname_as_fqdn
         // too
@@ -201,7 +201,7 @@ impl Cluster {
     }
 }
 
-fn as_deployment(vert: &Built, opts: &Opts) -> Deployment {
+fn as_deployment(vert: &Progdef, opts: &Opts) -> Deployment {
     let env = vec![
         EnvVar {
             name: "DAGYO_JOBS".to_string(),

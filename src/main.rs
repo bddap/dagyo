@@ -5,7 +5,7 @@ use dagyo::{
     config::Opts,
     docker::build_docker_image,
     kubestuff,
-    vertspec::{Built, VertSpec},
+    vertspec::{Progdef, VertSpec},
 };
 use tracing::info;
 
@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     for (name_for_humans, spec) in vertspecs {
         info!("building docker image for {}", name_for_humans);
         let progdef_hash = build_docker_image(&spec).await?;
-        verts.push(Built {
+        verts.push(Progdef {
             spec,
             progdef_hash,
             name_for_humans,

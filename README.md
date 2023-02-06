@@ -22,7 +22,6 @@ Two peices of data define a dagyo program:
   - the progdef's execution environment, including its resource requirements e.g. accelerators.
   - The progdef's scaling behavior e.g. how many vertices can the progdef run at a time. Some lightwieght progdefs may be able to handle 1000s of invocations, while others may only be able to handle 1.
   - A relative path to the the dockerfile for this progdef.
-  - healthcheck-timeout
 
 ## Dagyo Flow
 
@@ -34,7 +33,12 @@ A runnable instance of a progdef. Dagyo Job are serialized and stored in a queue
 
 In addition to the custom outputs specified by a job's Progdef. Jobs are provided with two additional outputs:
 - "panic" - indicates the job has failed, by default the Dagyo Sheduler will kill and cleanup the entire flow.
-- "health" - indicates the job is still running, if a job does not output to this stream for the specified period, the Dagyo Scheduler will kill and cleanup the entire flow.
+- "health" - indicates the job is still running
+   Each executor regulary pushes timestamps to this stream. The timestamps represent the aboslute
+   time in milliseconds when this the job should be considered dead. If the Dagyo Scheduler 
+   notices that a jobs most recently pushed timestamp is in the past, it may kill and cleanup the
+   entire flow. Timestamps are encoded as ascii integers representing the nubmer of milliseconds since
+   the unix epoch.
 
 In addition to the custom inputs specified by a job's Progdef. Jobs are provided with one additional input:
 - "stop" - if a job receives a message on this stream, it should stop this job and cleanup.
