@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    iter::once,
+};
 
 use anyhow::ensure;
 use petgraph::{
@@ -11,27 +14,83 @@ use petgraph::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::vertspec::Progdef;
+use crate::vertspec::{Progdef, Progname};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The serializable representation of a procedure.
+pub struct Proc {
+    pub nodes: Vec<Progname>,
+
+    /// Which output is connected to which input
+    /// the structure of the graph is validated later,
+    /// along with type checking.
+    pub edges: Vec<((usize, String), (usize, String))>,
+}
 
 /// A dag representing a not-yet-created flow.
-pub struct Stage0 {
-    pub graph: DiGraph<Progdef, (String, String)>,
+pub struct Procedure {
+    graph: DiGraph<Progdef, (String, String)>,
 }
 
-/// A Procedure ready to be executed. The edges of this graph represent
-/// freshly generated, not yet initialized, mailboxes for streams.
-pub struct Stage1 {
-    pub graph: Graph<Progdef, (String, MailBox, String)>,
+impl Proc {
+    pub fn as_graph(&self, progdefs: &[Progdef]) -> anyhow::Result<Procedure> {
+        let mut graph = DiGraph::new();
+        let mut idxes = HashMap::new();
+
+        let progdefs: HashMap<Progname, Progdef> = progdefs
+            .iter()
+            .map(|progdef| (progdef.name.clone(), progdef.clone()))
+            .collect();
+
+        for (i, progname) in self.nodes.iter().enumerate() {
+            let progdef = progdefs.get(progname).ok_or_else(|| {
+                anyhow::anyhow!("program {} not found in program definitions", progname)
+            })?;
+            let idx = graph.add_node(progdef.clone());
+            idxes.insert(i, idx);
+        }
+
+        for ((left_idx, output_name), (right_idx, input_name)) in self.edges.iter() {
+            let left_idx = *idxes
+                .get(left_idx)
+                .ok_or_else(|| anyhow::anyhow!("node {} not found in procedure", left_idx))?;
+            let right_idx = *idxes
+                .get(right_idx)
+                .ok_or_else(|| anyhow::anyhow!("node {} not found in procedure", right_idx))?;
+
+            graph.add_edge(
+                left_idx,
+                right_idx,
+                (output_name.clone(), input_name.clone()),
+            );
+        }
+
+        Ok(Procedure { graph })
+    }
 }
 
-impl Stage1 {
-    pub fn from_procedure(procedure: Stage0) -> anyhow::Result<Self> {
-        for node in procedure.graph.node_indices() {
-            let progdef = procedure.graph.node_weight(node).unwrap();
+impl Procedure {
+    pub fn with_pipes(self) -> anyhow::Result<WithPipes> {
+        self.validate()?;
+        Ok(WithPipes {
+            graph: self.graph.map(
+                |_, progdef| progdef.clone(),
+                |_, (src, sink)| (src.clone(), MailBox::new(), sink.clone()),
+            ),
+        })
+    }
+
+    /// Check for validity of the procedure.
+    /// No inputs should be unconnected.
+    /// No outputs should be unconnected.
+    /// Includes type checking.
+    fn validate(&self) -> anyhow::Result<()> {
+        for node in self.graph.node_indices() {
+            let progdef = self.graph.node_weight(node).unwrap();
 
             // verify all inputs have exactly one source.
             for name in progdef.spec.inputs.keys() {
-                let sources = procedure
+                let sources = self
                     .graph
                     .edges_directed(node, Incoming)
                     .filter(|edge| &edge.weight().1 == name)
@@ -40,14 +99,14 @@ impl Stage1 {
                     sources == 1,
                     "input {} of {} has {} sources, expected 1",
                     name,
-                    progdef.name_for_humans,
+                    progdef.name,
                     sources,
                 );
             }
 
-            // Verify all outputs are source to exactly one input.
+            // verify all outputs have exactly one sink.
             for name in progdef.spec.outputs.keys() {
-                let sinks = procedure
+                let sinks = self
                     .graph
                     .edges_directed(node, Outgoing)
                     .filter(|edge| &edge.weight().0 == name)
@@ -56,11 +115,39 @@ impl Stage1 {
                     sinks == 1,
                     "output {} of {} has {} sinks, expected 1",
                     name,
-                    progdef.name_for_humans,
+                    progdef.name,
                     sinks,
                 );
             }
         }
+
+        for edge in self.graph.edge_references() {
+            let (src, sink) = edge.weight();
+            let left = self.graph.node_weight(edge.source()).unwrap();
+            let right = self.graph.node_weight(edge.target()).unwrap();
+
+            // verify that the edge pulls from an output that actually exists.
+            left.spec.outputs.get(src).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "program {} does not have an output named {}",
+                    left.name,
+                    src
+                )
+            })?;
+
+            // verify that the edge pushes to an input that actually exists.
+            right.spec.inputs.get(sink).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "program {} does not have an input named {}",
+                    right.name,
+                    sink
+                )
+            })?;
+        }
+
+        // ensure there are no cycles
+        petgraph::algo::toposort(&self.graph, None)
+            .map_err(|cycle| anyhow::anyhow!("cycle detected: {:?}", cycle))?;
 
         // Note on type future implementation of inference and template parameters:
         //   We'll assert that if a node has no inputs then all it's outputs are concrete,
@@ -71,68 +158,59 @@ impl Stage1 {
         // Need some typing dsl to make this work.
 
         // verify the output typenames are equal input typenames
-        for edge in procedure.graph.edge_references() {
-            let src = procedure.graph.node_weight(edge.source()).unwrap();
-            let dst = procedure.graph.node_weight(edge.target()).unwrap();
+        for edge in self.graph.edge_references() {
+            let src = self.graph.node_weight(edge.source()).unwrap();
+            let dst = self.graph.node_weight(edge.target()).unwrap();
             let (outname, inname) = edge.weight();
 
             ensure!(
                 src.spec.outputs.get(outname).unwrap() == dst.spec.inputs.get(inname).unwrap(),
                 "output {} of {} does not match input {} of {}",
                 outname,
-                src.name_for_humans,
+                src.name,
                 inname,
-                dst.name_for_humans
+                dst.name
             );
         }
 
-        Ok(Self {
-            graph: procedure.graph.map(
-                |_, progdef| progdef.clone(),
-                |_, (src, sink)| (src.clone(), MailBox::new(), sink.clone()),
-            ),
-        })
+        Ok(())
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct MailBox {
-    pub name: Uuid,
+/// A Procedure ready to be executed. The edges of this graph represent
+/// freshly generated, not yet initialized, mailboxes for streams.
+pub struct WithPipes {
+    graph: Graph<Progdef, (String, MailBox, String)>,
 }
 
-impl MailBox {
-    pub fn new() -> Self {
-        Self {
-            name: Uuid::new_v4(),
-        }
+impl WithPipes {
+    pub fn flow(&self) -> Flow {
+        let jobs = self
+            .graph
+            .node_indices()
+            .map(|node| {
+                let progdef = self.graph.node_weight(node).unwrap().clone();
+                (progdef, self.job_desc(node))
+            })
+            .collect();
+        Flow { jobs }
     }
-}
 
-#[derive(Serialize, Deserialize)]
-pub struct JobDesc {
-    inputs: HashMap<String, MailBox>,
-    outputs: HashMap<String, MailBox>,
-    panic: MailBox,
-    health: MailBox,
-    stop: MailBox,
-}
-
-impl JobDesc {
-    fn from_s1(s1: &Stage1, node: NodeIndex) -> Self {
-        let inputs = s1
+    fn job_desc(&self, node: NodeIndex) -> JobDesc {
+        let inputs = self
             .graph
             .edges_directed(node, Incoming)
             .map(|edge| {
                 let (_src, mailbox, sink) = edge.weight();
-                (sink.clone(), mailbox.clone())
+                (sink.clone(), *mailbox)
             })
             .collect();
-        let outputs = s1
+        let outputs = self
             .graph
             .edges_directed(node, Outgoing)
             .map(|edge| {
                 let (src, mailbox, _sink) = edge.weight();
-                (src.clone(), mailbox.clone())
+                (src.clone(), *mailbox)
             })
             .collect();
         JobDesc {
@@ -145,20 +223,74 @@ impl JobDesc {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq, Debug, Copy)]
+/// Adress for executors to push xor pull from.
+struct MailBox {
+    addr: Uuid,
+}
+
+impl MailBox {
+    fn new() -> Self {
+        Self {
+            addr: Uuid::new_v4(),
+        }
+    }
+
+    fn queue_name(&self) -> String {
+        self.addr.to_string()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct JobDesc {
+    inputs: HashMap<String, MailBox>,
+    outputs: HashMap<String, MailBox>,
+    panic: MailBox,
+    health: MailBox,
+    stop: MailBox,
+}
+
 pub struct Flow {
-    pub jobs: Vec<(Progdef, JobDesc)>,
+    jobs: Vec<(Progdef, JobDesc)>,
 }
 
 impl Flow {
-    pub fn from_stage1(s1: Stage1) -> Self {
-        let jobs = s1
-            .graph
-            .node_indices()
-            .map(|node| {
-                let progdef = s1.graph.node_weight(node).unwrap().clone();
-                (progdef, JobDesc::from_s1(&s1, node))
+    pub async fn upload(&self, mq: &lapin::Connection) -> anyhow::Result<()> {
+        let channel = mq.create_channel().await?;
+
+        // ensure all required job queues exists
+        for (progdef, _jobdesc) in &self.jobs {
+            channel
+                .queue_declare(
+                    &progdef.hash.job_mailbox(),
+                    lapin::options::QueueDeclareOptions::default(),
+                    lapin::types::FieldTable::default(),
+                )
+                .await?;
+        }
+
+        let ephemeral_queues: HashSet<&MailBox> = self
+            .jobs
+            .iter()
+            .flat_map(|(_progdef, jobdesc)| {
+                once(&jobdesc.panic)
+                    .chain(once(&jobdesc.health))
+                    .chain(once(&jobdesc.stop))
+                    .chain(jobdesc.inputs.values())
+                    .chain(jobdesc.outputs.values())
             })
             .collect();
-        Flow { jobs }
+
+        for p in ephemeral_queues {
+            channel
+                .queue_declare(
+                    &p.queue_name(),
+                    lapin::options::QueueDeclareOptions::default(),
+                    lapin::types::FieldTable::default(),
+                )
+                .await?;
+        }
+
+        Ok(())
     }
 }

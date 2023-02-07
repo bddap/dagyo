@@ -55,3 +55,4 @@ async def main() -> None:
     async for job in common.jobs():
         async with job:
             await run(job)
+

@@ -61,7 +61,7 @@ impl Cluster {
         K: Clone + DeserializeOwned + Serialize + Debug + Resource<Scope = NamespaceResourceScope>,
         <K as kube::Resource>::DynamicType: Default,
     {
-        let api: Api<K> = Api::namespaced(client.clone(), &self.namespace.as_str());
+        let api: Api<K> = Api::namespaced(client.clone(), self.namespace.as_str());
 
         for resource in complete_set {
             assert!(resource.meta().name.is_some(), "resource is unnamed");
@@ -159,7 +159,7 @@ impl Cluster {
         K: Clone + DeserializeOwned + Debug + Resource<Scope = NamespaceResourceScope>,
         <K as kube::Resource>::DynamicType: Default,
     {
-        let api: Api<K> = Api::namespaced(client.clone(), &self.namespace.as_str());
+        let api: Api<K> = Api::namespaced(client.clone(), self.namespace.as_str());
 
         for resource in to_keep {
             assert!(resource.meta().name.is_some(), "resource is unnamed");
@@ -205,7 +205,7 @@ fn as_deployment(vert: &Progdef, opts: &Opts) -> Deployment {
     let env = vec![
         EnvVar {
             name: "DAGYO_JOBS".to_string(),
-            value: Some(format!("dagyo_jobs_{}", vert.progdef_hash.shorthex())),
+            value: Some(format!("dagyo_jobs_{}", vert.hash.shorthex())),
             ..Default::default()
         },
         EnvVar {
@@ -217,7 +217,7 @@ fn as_deployment(vert: &Progdef, opts: &Opts) -> Deployment {
     let pod_spec = PodSpec {
         containers: vec![Container {
             name: "dagyo-executor".to_string(),
-            image: Some(vert.progdef_hash.image_name()),
+            image: Some(vert.hash.image_name()),
             env: Some(env),
             // images are content-addressed so we don't need to worry about cache invalidationn
             image_pull_policy: Some("IfNotPresent".to_string()),
@@ -244,7 +244,7 @@ fn as_deployment(vert: &Progdef, opts: &Opts) -> Deployment {
     };
     let deployment = Deployment {
         metadata: ObjectMeta {
-            name: Some(as_pod_name(&vert.name_for_humans)),
+            name: Some(as_pod_name(vert.name.as_str())),
             labels: Some([("dago_will_prune".to_string(), "yes".to_string())].into()),
             namespace: Some(opts.namespace.as_str().to_string()),
             ..Default::default()

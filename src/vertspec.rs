@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fmt::{Debug, Formatter},
+    fmt::{Debug, Display, Formatter},
     path::{Path, PathBuf},
 };
 
@@ -26,12 +26,12 @@ impl VertSpec {
     /// read a set of vertspecs from a file
     /// relative paths are considered relative to the vertspec file
     /// paths returned are canonical and absolute
-    pub fn from_file(path: &Path) -> anyhow::Result<HashMap<String, Self>> {
+    pub fn from_file(path: &Path) -> anyhow::Result<HashMap<Progname, Self>> {
         let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let vertspec_file = std::fs::read_to_string(path).with_context(|| {
             format!("failed to read vertspec file at {}", path.to_string_lossy())
         })?;
-        let mut vertspec: HashMap<String, VertSpec> = toml::from_str(&vertspec_file)?;
+        let mut vertspec: HashMap<Progname, VertSpec> = toml::from_str(&vertspec_file)?;
         for v in vertspec.values_mut() {
             v.make_relative_to(&parent)?;
         }
@@ -74,12 +74,26 @@ impl ProgdefHash {
         format!("dagyo_{}", self.shorthex())
     }
 
+    /// convert to hex the first 64 bits of this hash
     pub fn shorthex(&self) -> String {
         self.hash
             .iter()
             .map(|b| format!("{:02x}", b))
             .take(16)
             .collect()
+    }
+
+    /// convert to hex the first 128 bits of this hash
+    fn hex128(&self) -> String {
+        self.hash
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .take(32)
+            .collect()
+    }
+
+    pub fn job_mailbox(&self) -> String {
+        self.hex128()
     }
 }
 
@@ -93,11 +107,33 @@ fn stable_map_hash(map: &HashMap<String, String>) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Progname(String);
+
+impl Progname {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for Progname {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl Display for Progname {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Progdef {
     pub spec: VertSpec,
-    pub progdef_hash: ProgdefHash,
-    pub name_for_humans: String,
+    pub hash: ProgdefHash,
+    pub name: Progname,
 }
 
 fn default_build_context() -> PathBuf {

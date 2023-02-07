@@ -1,3 +1,4 @@
+# prepends "hello " to each input
 [greet]
 dockerfile = "./multiple/all.dockerfile"
 docker_build_context = "./multiple"
@@ -5,8 +6,16 @@ docker_build_args.SCRIPT = "./greet.py"
 inputs.name = "utf8-string"
 outputs.greeting = "utf8-string"
 
+# outputs a series of strings
 [source]
 dockerfile = "./multiple/all.dockerfile"
 docker_build_context = "./multiple"
 docker_build_args.SCRIPT = "./source.py"
-outputs.some_strings = "utf8-string"
+outputs.src = "utf8-string"
+
+# consumes a single input, doing nothing with it
+[void_sink]
+dockerfile = "./multiple/all.dockerfile"
+docker_build_context = "./multiple"
+docker_build_args.SCRIPT = "./void_sink.py"
+inputs.sink = "utf8-string"
