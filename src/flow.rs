@@ -12,6 +12,7 @@ use petgraph::{
     Graph,
 };
 use serde::{Deserialize, Serialize};
+use tracing::{debug, trace};
 use uuid::Uuid;
 
 use crate::vertspec::{Progdef, Progname};
@@ -225,6 +226,7 @@ impl WithPipes {
 
 #[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq, Debug, Copy)]
 /// Adress for executors to push xor pull from.
+#[serde(transparent)]
 struct MailBox {
     addr: Uuid,
 }
@@ -258,17 +260,6 @@ impl Flow {
     pub async fn upload(&self, mq: &lapin::Connection) -> anyhow::Result<()> {
         let channel = mq.create_channel().await?;
 
-        // ensure all required job queues exists
-        for (progdef, _jobdesc) in &self.jobs {
-            channel
-                .queue_declare(
-                    &progdef.hash.job_mailbox(),
-                    lapin::options::QueueDeclareOptions::default(),
-                    lapin::types::FieldTable::default(),
-                )
-                .await?;
-        }
-
         let ephemeral_queues: HashSet<&MailBox> = self
             .jobs
             .iter()
@@ -287,6 +278,20 @@ impl Flow {
                     &p.queue_name(),
                     lapin::options::QueueDeclareOptions::default(),
                     lapin::types::FieldTable::default(),
+                )
+                .await?;
+        }
+
+        for (progdef, jobdesc) in &self.jobs {
+            let message = serde_json::to_vec(&jobdesc).unwrap();
+            trace!("{}", serde_json::to_string(&jobdesc).unwrap());
+            channel
+                .basic_publish(
+                    "",
+                    &progdef.hash.job_mailbox(),
+                    Default::default(),
+                    &message,
+                    Default::default(),
                 )
                 .await?;
         }

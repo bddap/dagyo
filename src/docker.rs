@@ -1,3 +1,12 @@
+// Docker is only used for building. We can probably swap it out for podman.
+// Alternatively we could assume a build-time dependency on minikube.
+// Looks like minikube can also build images.
+//
+// When running a cluster locally, the containerd backed for minikube seems
+// more sane. From experience, minikube using the docker backend is unlikely
+// even start. The podman backend seems like it has potential but it's currently
+// experimental and doesn't support all features.
+
 use std::path::Path;
 
 use bollard::Docker;

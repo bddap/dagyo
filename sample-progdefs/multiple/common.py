@@ -82,21 +82,20 @@ class Job:
     async def __aexit__(
         self, exc_type: T.Type[BaseException], exc_value: BaseException, traceback
     ) -> bool:
-        print(exc_type, exc_value, traceback)
         assert exc_type is None == exc_value is None
-        assert False, """
-        this should:
-          do_panic in error
-          ack original_message on success
-          close all outputs
-          assert all inputs have been closed?
-          finish closing all inputs?
-          post to health on success?
-        """
+        assert traceback is None == exc_value is None
+
+        if exc_value is not None:
+            await self.do_panic(str(exc_value))
+
+        for to_close in [*self.outputs.values(), self.panic, self.health]:
+            await to_close.channel.close()
+
         # Is there any way we can assert the stop signal was heeded?
         # Maybe stop should result in an exception?
-
         # Can we panic with the full traceback? Maybe panics should be json.
+
+        # returning True means we handled the exception
         return True
 
 
@@ -109,6 +108,7 @@ async def jobs() -> T.AsyncIterator[Job]:
         await channel.set_qos(prefetch_count=1)
         queue = await channel.get_queue(job_mailbox)
         async for message in queue.iterator():
+            await message.ack()  # tell the queue never to give this job to another executor, we fail while running it
             yield await Job.create(message, channel)
 
 

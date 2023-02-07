@@ -39,14 +39,17 @@ class Inputs:
 
 @dataclass
 class Outputs:
-    some_strings: OutStream
+    src: OutStream
 
 
 async def run(job: Job) -> None:
+    eprint("starting a job")
     _ = Inputs(**job.inputs)
     outputs = Outputs(**job.outputs)
     for name in NAMES:
-        await outputs.some_strings.send(name.encode("utf-8"))
+        eprint("outputting", name)
+        await outputs.src.send(name.encode("utf-8"))
+    eprint("done with job")
 
 
 @asyncmain
@@ -55,4 +58,3 @@ async def main() -> None:
     async for job in common.jobs():
         async with job:
             await run(job)
-

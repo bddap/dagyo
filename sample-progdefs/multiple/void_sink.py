@@ -17,8 +17,10 @@ async def run(job: Job) -> None:
     inputs = Inputs(**job.inputs)
     _ = Outputs(**job.outputs)
     i = 0
-    async for _ in inputs.sink.iterator():
+    async for message in inputs.sink.iterator():
+        await message.ack()
         eprint("dropping", i)
+        i += 1
 
 
 @asyncmain

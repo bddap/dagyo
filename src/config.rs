@@ -2,7 +2,7 @@ use std::{fmt::Debug, fmt::Formatter, path::PathBuf, str::FromStr};
 
 use clap::Parser;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct Opts {
     /// Path to program definitions
     #[clap(short, long, env = "DAGYO_VERTS")]

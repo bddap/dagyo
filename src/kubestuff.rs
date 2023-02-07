@@ -32,7 +32,7 @@ pub struct Cluster {
 }
 
 const MQ_HOSTNAME: &str = "dagyo-mq";
-const MQ_URL: &str = "amqp://guest:guest@dagyo-mq:443";
+const MQ_URL: &str = "amqp://guest:guest@dagyo-mq:5672";
 const MQ_PORT: u16 = 5672;
 
 impl Cluster {
@@ -205,7 +205,7 @@ fn as_deployment(vert: &Progdef, opts: &Opts) -> Deployment {
     let env = vec![
         EnvVar {
             name: "DAGYO_JOBS".to_string(),
-            value: Some(format!("dagyo_jobs_{}", vert.hash.shorthex())),
+            value: Some(vert.hash.job_mailbox()),
             ..Default::default()
         },
         EnvVar {
@@ -227,7 +227,7 @@ fn as_deployment(vert: &Progdef, opts: &Opts) -> Deployment {
     };
     let labels: BTreeMap<String, String> = [("dagyo_executor".to_string(), "a".to_string())].into();
     let deployment_spec = DeploymentSpec {
-        replicas: Some(2),
+        replicas: Some(1),
         template: PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
