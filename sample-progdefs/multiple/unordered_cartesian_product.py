@@ -35,7 +35,7 @@ async def run(job: common.Job) -> None:
     # When a `b` arrives combine with all the `as` we've seen so far
     # When both a and b streams close, return. The output stream will be closed automatically
 
-    def inctotal(n: int):
+    def inc_total(n: int):
         nonlocal total_bytes
         total_bytes += n
         if total_bytes > MAX_BYTES_PER_JOB:
@@ -44,20 +44,18 @@ async def run(job: common.Job) -> None:
             )
 
     async def consume_ays():
-        async for message in inputs.a.iterator():
-            await message.ack()
-            inctotal(len(message.body))
-            s = message.body.decode("utf-8")
+        async for message in inputs.a:
+            inc_total(len(message))
+            s = message.decode("utf-8")
             async with lock:
                 ays.append(s)
                 for b in bes:
                     await outputs.product.send((s + b).encode("utf-8"))
 
     async def consume_bes():
-        async for message in inputs.b.iterator():
-            await message.ack()
-            inctotal(len(message.body))
-            s = message.body.decode("utf-8")
+        async for message in inputs.b:
+            inc_total(len(message))
+            s = message.decode("utf-8")
             async with lock:
                 bes.append(s)
                 for a in ays:

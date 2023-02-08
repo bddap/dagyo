@@ -16,9 +16,8 @@ async def run(job: Job) -> None:
     inputs = Inputs(**job.inputs)
     _ = Outputs(**job.outputs)
     i = 0
-    async for message in inputs.sink.iterator():
-        await message.ack()
-        s = message.body.decode("utf-8")
+    async for message in inputs.sink:
+        s = message.decode("utf-8")
         eprint(i, s)
         i += 1
 

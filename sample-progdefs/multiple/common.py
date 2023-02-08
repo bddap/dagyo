@@ -1,8 +1,9 @@
 import typing as T
+from types import TracebackType
 from dataclasses import dataclass
 import os
 from aio_pika import connect, Message
-from aio_pika.abc import AbstractIncomingMessage, AbstractQueue, AbstractChannel
+from aio_pika.abc import AbstractQueue, AbstractChannel, AbstractExchange
 from functools import lru_cache
 from pydantic import BaseModel
 from dataclasses import dataclass
@@ -24,16 +25,44 @@ async def connect_mq():
 
 InStreamAddr: T.TypeAlias = str
 OutStreamAddr: T.TypeAlias = str
-InStream: T.TypeAlias = AbstractQueue
+
+
+@dataclass
+class InStream:
+    q: AbstractQueue
+
+    @staticmethod
+    async def create(channel: AbstractChannel, addr: InStreamAddr) -> "InStream":
+        q = await channel.declare_queue(addr, passive=True)
+        return InStream(q)
+
+    async def __aiter__(self) -> T.AsyncIterator[bytes]:
+        # A message starting with a single byte 0x01 indicates end of stream
+        # an eos message must be exactly 1 byte long.
+        # Any other message is data. The first byte is ignored.
+        async for message in self.q.iterator():
+            await message.ack()
+            assert (
+                len(message.body) >= 1
+            ), "received an invalid message on and input stream, messages must be at least 1 byte long"
+            if message.body[0] == 0:
+                assert (
+                    len(message.body) == 1
+                ), "received an invalid end-of-stream message, eos messages must be exactly 1 byte long"
+                break
+            yield message.body[1:]
 
 
 @dataclass
 class OutStream:
-    channel: AbstractChannel
+    exchange: AbstractExchange
     addr: OutStreamAddr
 
     async def send(self, msg: bytes):
-        await self.channel.default_exchange.publish(Message(msg), routing_key=self.addr)
+        await self.exchange.publish(Message(b"\0" + msg), routing_key=self.addr)
+
+    async def close(self):
+        await self.exchange.publish(Message(b"\1"), routing_key=self.addr)
 
 
 class JobDesc(BaseModel):
@@ -48,8 +77,6 @@ class JobDesc(BaseModel):
 
 @dataclass
 class Job:
-    # the message that encoded this job
-    original_message: AbstractIncomingMessage
     inputs: dict[str, InStream]
     outputs: dict[str, OutStream]
     panic: OutStream
@@ -65,17 +92,15 @@ class Job:
         await self.health.send(b"")
 
     @staticmethod
-    async def create(
-        message: AbstractIncomingMessage, channel: AbstractChannel
-    ) -> "Job":
-        jd = JobDesc.parse_raw(message.body)
+    async def create(message_body: bytes, channel: AbstractChannel) -> "Job":
+        jd = JobDesc.parse_raw(message_body)
+        exchange = channel.default_exchange
         return Job(
-            original_message=message,
-            inputs={k: await channel.get_queue(v) for k, v in jd.inputs.items()},
-            outputs={k: OutStream(channel, v) for k, v in jd.outputs.items()},
-            panic=OutStream(channel, jd.panic),
-            health=OutStream(channel, jd.health),
-            stop=await channel.get_queue(jd.stop),
+            inputs={k: await InStream.create(channel, v) for k, v in jd.inputs.items()},
+            outputs={k: OutStream(exchange, v) for k, v in jd.outputs.items()},
+            panic=OutStream(exchange, jd.panic),
+            health=OutStream(exchange, jd.health),
+            stop=await InStream.create(channel, jd.stop),
         )
 
     async def __aenter__(self) -> "Job":
@@ -85,17 +110,17 @@ class Job:
         self,
         exc_type: T.Optional[T.Type[BaseException]],
         exc_value: T.Optional[BaseException],
-        traceback: T.Optional[T.Any],
+        traceback: T.Optional[TracebackType],
     ) -> bool:
         _ = exc_type, traceback
 
         if exc_value is not None:
-            s = str(exc_value)
-            eprint("Paniking", s)
-            await self.do_panic(s)
+            e = repr(exc_value)
+            eprint("Paniking:", e)
+            await self.do_panic(e)
 
         for to_close in [*self.outputs.values(), self.panic, self.health]:
-            await to_close.channel.close()
+            await to_close.close()
 
         # Is there any way we can assert the stop signal was heeded?
         # Maybe stop should result in an exception?
@@ -110,12 +135,16 @@ async def jobs() -> T.AsyncIterator[Job]:
     connection = await connect_mq()
 
     async with connection:
-        channel = await connection.channel()
-        await channel.set_qos(prefetch_count=1)
-        queue = await channel.get_queue(job_mailbox)
-        async for message in queue.iterator():
-            await message.ack()  # tell the queue never to give this job to another executor, we fail while running it
-            yield await Job.create(message, channel)
+        jobs_channel = await connection.channel()
+        await jobs_channel.set_qos(prefetch_count=1)
+        jobs_queue = await jobs_channel.get_queue(job_mailbox)
+
+        async for message in jobs_queue.iterator():
+            # tell the queue never to give this job to another executor, even if we fail while running it
+            await message.ack()
+
+            streams_channel = await connection.channel()
+            yield await Job.create(message.body, streams_channel)
 
 
 def asyncmain(func: T.Callable[[], T.Coroutine]) -> None:

@@ -113,6 +113,8 @@ before the pod shuts down.
 This method should handle auto-scaledowns too. When a pod is being scaled down, the signall will tell it to stop taking new jobs
 due to the large termination grace period, the pod will be allowed to finish any in-progress jobs before it shuts down.
 
+After an upgrade, how do we ensure jobs in the out-of-date job queues are all processed?
+
 ## Plan for secrets management
 
 We'll define a map from Progdef name to a enviroment dictionary. That list will go into the clusters configmap.
