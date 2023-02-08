@@ -168,15 +168,20 @@ Executors' statefullnes is respected; dagyo will never swap out an executor mid-
 
 In an alternate universe. Resumable executors were implemented by tracking the state each
 job. This substantially complicated things for progdef writers. Progdefs needed to be
-be written as state machines with serializable state. While a nice set of abstractions
-might have made this easier, the version of daggo existing in our universe chooses not
-to spend any
+be written as state machines with serializable state. This paradigm is sometimes referred to
+as "Checkpoint and Restore". While a nice set of abstractions
+might have made Checkpoint and Restore less of a burden for Progdef implementers,
+the version of daggo existing in our universe chooses not to spend any
 [strangeness budget](https://steveklabnik.com/writing/the-language-strangeness-budget)
-on the issue. Dagyo chooses not to require progdef implementers to write their progdefs
-as state machines.
+on the issue.
 
-This design choice is intentional, but do feel welcome to get in touch if you have
-ideas for implementing recoverable jobs.
+See also: section 3.4 "Fault tolerance and availability" of
+[Naiad](https://www.microsoft.com/en-us/research/wp-content/uploads/2013/11/naiad_sosp2013.pdf)
+for more thoughts on "Checkpoint and Restore".
+
+This design choice is intentional, but you are welcome to get in touch if you have
+ideas for implementing recoverable jobs. There may be a way to do this without putting
+too much burden on progdef implementers.
 
 ## Misc Things Dagyo Needs
 
