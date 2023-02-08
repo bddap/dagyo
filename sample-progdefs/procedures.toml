@@ -1,0 +1,41 @@
+[[procedure]]
+nodes = ["source", "greet", "greet", "void_sink"]
+edges = [
+  [[0, "src"], [1, "name"]],
+  [[1, "greeting"], [2, "name"]],
+  [[2, "greeting"], [3, "sink"]],
+]
+
+[[procedure]]
+nodes = [
+  "source", # 0
+  "source", # 1
+  "source", # 2
+  "greet",  # 3
+  "void_sink", # 4
+  "unordered_cartesian_product", # 5
+  "unordered_cartesian_product", # 6
+]
+edges = [
+    [[0, "src"], [5, "a"]], # source0 into unordered_cartesian_product5 a
+    [[1, "src"], [5, "b"]], # source1 into unordered_cartesian_product6 b
+    [[2, "src"], [3, "name"]], # source2 into greet3 name
+    [[3, "greeting"], [6, "a"]], # greet3 into unordered_cartesian_product6 a
+    [[5, "product"], [6, "b"]], # unordered_cartesian_product5 into unordered_cartesian_product6 b
+    [[6, "product"], [4, "sink"]], # unordered_cartesian_product6 into void_sink4 sink to close all the outputs
+]
+
+# Disconnected graphs are permitted.
+[[procedure]]
+nodes = ["source", "void_sink", "source", "void_sink"]
+edges = [
+  [[0, "src"], [1, "sink"]],
+  [[2, "src"], [3, "sink"]],
+]
+
+# The empty graph is a valid procedure.
+[[procedure]]
+nodes = []
+edges = []
+
+

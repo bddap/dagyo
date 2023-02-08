@@ -1,6 +1,6 @@
-import common
-from common import asyncmain, OutStream, Job, eprint
+from common import OutStream, Job, eprint, blastoff
 from dataclasses import dataclass
+
 
 NAMES = [
     "Alice",
@@ -52,9 +52,6 @@ async def run(job: Job) -> None:
     eprint("done with job")
 
 
-@asyncmain
-async def main() -> None:
-    eprint("Source Starting")
-    async for job in common.jobs():
-        async with job:
-            await run(job)
+if __name__ == "__main__":
+    eprint("Source Starting..")
+    blastoff(run, 10_000)

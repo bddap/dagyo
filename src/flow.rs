@@ -12,7 +12,6 @@ use petgraph::{
     Graph,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, trace};
 use uuid::Uuid;
 
 use crate::vertspec::{Progdef, Progname};
@@ -26,11 +25,6 @@ pub struct Proc {
     /// the structure of the graph is validated later,
     /// along with type checking.
     pub edges: Vec<((usize, String), (usize, String))>,
-}
-
-/// A dag representing a not-yet-created flow.
-pub struct Procedure {
-    graph: DiGraph<Progdef, (String, String)>,
 }
 
 impl Proc {
@@ -68,6 +62,11 @@ impl Proc {
 
         Ok(Procedure { graph })
     }
+}
+
+/// A dag representing a not-yet-created flow.
+pub struct Procedure {
+    graph: DiGraph<Progdef, (String, String)>,
 }
 
 impl Procedure {
@@ -284,7 +283,6 @@ impl Flow {
 
         for (progdef, jobdesc) in &self.jobs {
             let message = serde_json::to_vec(&jobdesc).unwrap();
-            trace!("{}", serde_json::to_string(&jobdesc).unwrap());
             channel
                 .basic_publish(
                     "",
@@ -298,4 +296,18 @@ impl Flow {
 
         Ok(())
     }
+}
+
+pub fn from_toml(toml: &str, progdefs: &[Progdef]) -> anyhow::Result<Vec<Flow>> {
+    #[derive(Debug, Serialize, Deserialize)]
+    struct TomlProcedures {
+        procedure: Vec<Proc>,
+    }
+    let flows: TomlProcedures = toml::from_str(toml).unwrap();
+    let mut ret: Vec<Flow> = Vec::new();
+    for proc in flows.procedure {
+        let f = proc.as_graph(progdefs)?.with_pipes()?.flow();
+        ret.push(f);
+    }
+    Ok(ret)
 }

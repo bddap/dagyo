@@ -177,3 +177,30 @@ as state machines.
 
 This design choice is intentional, but do feel welcome to get in touch if you have
 ideas for implementing recoverable jobs.
+
+## Misc Things Dagyo Needs
+
+- [x] Type Checking
+- [x] Example Progdefs
+- [x] local demo
+- [ ] remote demo.
+- [ ] Speedup image builds for faster feedback cycles.
+- [ ] Generic types and type inference.
+- [ ] Autoscaling, vertical and horizontal.
+- [ ] A python library to simplify writing progdefs.
+- [ ] Test suite that runs pipelines locally.
+- [ ] Machine specs that let a progdef specify the type of machine it needs i.e. GPU.
+- [ ] A way to feed a static input to a node. Ideally as bytes. Perhaps a special `const` node that plugs into a progdef.
+- [ ] A way to extract the output from a flow as streams of bytes.
+- [ ] Separate image build from kube deployment.
+- [ ] Separate sheduler binary that runs *inside* the cluster.
+- [ ] Scheduler needs to cleanup successful or failed flows.
+- [ ] Sheduler to implement flow "panics".
+- [ ] Progdef library to implement watching for "stop".
+- [ ] Progdef library to implement "health" logic.
+- [ ] Progdef library to stop accepting new jobs when kubernetes sends a termination.
+- [ ] Let users pipe from "panic" endpoints?
+- [ ] Let users pipe into "stop" endpoints?
+- [ ] Internally consistent and precise vocabulary for describing parts of dagyo e.g. program vs. procedure.
+- [ ] Ensure progdefs that crash without panicking do always cause the flow to panic.
+

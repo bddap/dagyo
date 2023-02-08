@@ -19,3 +19,11 @@ dockerfile = "./multiple/all.dockerfile"
 docker_build_context = "./multiple"
 docker_build_args.SCRIPT = "./void_sink.py"
 inputs.sink = "utf8-string"
+
+[unordered_cartesian_product]
+dockerfile = "./multiple/all.dockerfile"
+docker_build_context = "./multiple"
+docker_build_args.SCRIPT = "./unordered_cartesian_product.py"
+inputs.a = "utf8-string"
+inputs.b = "utf8-string"
+outputs.product = "utf8-string"

@@ -9,8 +9,7 @@ use clap::Parser;
 use dagyo::{
     config::Opts,
     docker::build_docker_image,
-    flow::Proc,
-    kubestuff,
+    flow, kubestuff,
     vertspec::{Progdef, VertSpec},
 };
 use futures::future::select;
@@ -72,33 +71,23 @@ async fn main() -> anyhow::Result<()> {
     cluster.apply().await?;
     info!("spun up containers");
 
-    info!("manually connect source to greet and greet to some output");
-    let proc = Proc {
-        nodes: vec![
-            "source".into(),
-            "greet".into(),
-            "greet".into(),
-            "void_sink".into(),
-        ],
-        edges: vec![
-            ((0, "src".into()), (1, "name".into())),
-            ((1, "greeting".into()), (2, "name".into())),
-            ((2, "greeting".into()), (3, "sink".into())),
-        ],
-    };
-    let flow = proc.as_graph(&verts)?.with_pipes()?.flow();
-
     info!("connecting to message queue");
     let broker = connect_to_broker(opts.clone()).await?;
     dagyo::queue::ensure_queues(&broker, &verts).await?;
 
-    info!("uploading flow..");
-    flow.upload(&broker).await?;
-    info!("uploaded flow");
+    info!("reading sample flows");
+    let flows = flow::from_toml(include_str!("../sample-progdefs/procedures.toml"), &verts)?;
+    for flow in flows {
+        info!("uploading flow..");
+        flow.upload(&broker).await?;
+        info!("uploaded flow");
+    }
 
     // read from the output and print it
 
     // cleanup
+
+    info!("end");
 
     Ok(())
 }

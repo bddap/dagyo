@@ -1,5 +1,4 @@
-import common
-from common import asyncmain, InStream, Job, eprint
+from common import InStream, Job, eprint, blastoff
 from dataclasses import dataclass
 
 
@@ -19,13 +18,11 @@ async def run(job: Job) -> None:
     i = 0
     async for message in inputs.sink.iterator():
         await message.ack()
-        eprint("dropping", i)
+        s = message.body.decode("utf-8")
+        eprint(i, s)
         i += 1
 
 
-@asyncmain
-async def main() -> None:
-    eprint("Void Sink Starting")
-    async for job in common.jobs():
-        async with job:
-            await run(job)
+if __name__ == "__main__":
+    eprint("Void Sink Starting..")
+    blastoff(run, 10_000)

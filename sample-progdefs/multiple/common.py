@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from dataclasses import dataclass
 import sys
 import asyncio
+from typing import Callable, Awaitable
+from asyncio import Semaphore
 
 
 def eprint(*args, **kwargs) -> None:
@@ -80,13 +82,17 @@ class Job:
         return self
 
     async def __aexit__(
-        self, exc_type: T.Type[BaseException], exc_value: BaseException, traceback
+        self,
+        exc_type: T.Optional[T.Type[BaseException]],
+        exc_value: T.Optional[BaseException],
+        traceback: T.Optional[T.Any],
     ) -> bool:
-        assert exc_type is None == exc_value is None
-        assert traceback is None == exc_value is None
+        _ = exc_type, traceback
 
         if exc_value is not None:
-            await self.do_panic(str(exc_value))
+            s = str(exc_value)
+            eprint("Paniking", s)
+            await self.do_panic(s)
 
         for to_close in [*self.outputs.values(), self.panic, self.health]:
             await to_close.channel.close()
@@ -119,3 +125,35 @@ def asyncmain(func: T.Callable[[], T.Coroutine]) -> None:
     """
     if func.__module__ == "__main__":
         asyncio.run(func())
+
+
+def blastoff(cb: Callable[[Job], Awaitable[None]], worker_slots: int) -> None:
+    """
+    Run an async callback for each job, with a limit on the number of jobs running
+    at once.
+    Job outputs are automatically closed when the callback returns or raises.
+    If the callback throws an error, a panic output is automatically sent.
+    The callback is run within an asyncio executor.
+    """
+
+    work_permit = Semaphore(worker_slots)
+
+    async def run_lock(job: Job) -> None:
+        try:
+            async with job:
+                await cb(job)
+        finally:
+            work_permit.release()
+
+    async def main() -> None:
+        jbs = jobs()
+
+        while True:
+            await work_permit.acquire()
+            try:
+                job = await anext(jbs)
+            except StopAsyncIteration:
+                break
+            asyncio.create_task(run_lock(job))
+
+    asyncio.run(main())
