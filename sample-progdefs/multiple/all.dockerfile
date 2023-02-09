@@ -19,9 +19,9 @@ RUN mkdir /app
 COPY --from=builder /app/requirements.txt /app
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY . .
+COPY common.py .
 
 ARG SCRIPT
-RUN mv $SCRIPT ./entry.py
+COPY $SCRIPT entry.py
 
 CMD ["python", "./entry.py"]

@@ -45,7 +45,7 @@ class InStream:
             assert (
                 len(message.body) >= 1
             ), "received an invalid message on and input stream, messages must be at least 1 byte long"
-            if message.body[0] == 0:
+            if message.body[0] == 1:
                 assert (
                     len(message.body) == 1
                 ), "received an invalid end-of-stream message, eos messages must be exactly 1 byte long"
@@ -145,15 +145,6 @@ async def jobs() -> T.AsyncIterator[Job]:
 
             streams_channel = await connection.channel()
             yield await Job.create(message.body, streams_channel)
-
-
-def asyncmain(func: T.Callable[[], T.Coroutine]) -> None:
-    """
-    Decorator that runs an async function using asyncio only if the function's
-    containing module is "__main__".
-    """
-    if func.__module__ == "__main__":
-        asyncio.run(func())
 
 
 def blastoff(cb: Callable[[Job], Awaitable[None]], worker_slots: int) -> None:

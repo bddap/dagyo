@@ -1,7 +1,6 @@
 import common
-from common import asyncmain, eprint, OutStream, InStream, Job
+from common import eprint, OutStream, InStream, blastoff
 from dataclasses import dataclass
-from asyncio import Semaphore
 import asyncio
 
 # This progdef is stateful, and state grows with every message. We protect against
@@ -64,29 +63,6 @@ async def run(job: common.Job) -> None:
     await asyncio.gather(consume_ays(), consume_bes())
 
 
-# run job and then release the lock
-async def run_lock(job: Job, sem: Semaphore) -> None:
-    try:
-        async with job:
-            await run(job)
-    finally:
-        sem.release()
-
-
-# we actually want to handle some number of jobs at a time
-@asyncmain
-async def main() -> None:
-    eprint("Cartesian Product Starting..")
-
-    # how many jobs will this executor accept at a time
-    worker_slots = Semaphore(10)
-
-    jobs = common.jobs()
-
-    while True:
-        await worker_slots.acquire()
-        try:
-            job = await anext(jobs)
-        except StopAsyncIteration:
-            break
-        asyncio.create_task(run_lock(job, worker_slots))
+if __name__ == "__main__":
+    eprint("starting unordered_cartesian_product")
+    blastoff(run, 10)
