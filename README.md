@@ -95,7 +95,14 @@ This repo will contain example dagyo programs, but nothing specific to Postera.
 Why not use aws lambda to run executors?
 Timeouts. No support for streaming. No support for GPU acceleration. No support for binary serialization. Extra vendor lock-in.
 
-# What sort of message broker do we need?
+[Kubeflow](https://www.kubeflow.org/docs) claims to be specifically for ML but maybe is general enough to use in place of dagyo or as a layer under dagyo.
+Warrants further investigation. Some things to check:
+- Can it stream?
+- Can it typecheck?
+- Can it scale?
+- Can we use it to run user-defined flows?
+
+# what sort of message broker do we need?
 
 - Serialization: as long as messages can be byte arrays, that will be enough.
 - We need the ability for an executor to pull exactly one job such that no other executor can pull the same message. This pattern is called [Competing Consumers](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html).
