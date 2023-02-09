@@ -1,8 +1,4 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    process::Command,
-    str::from_utf8,
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use anyhow::Context;
 use clap::Parser;
@@ -30,40 +26,10 @@ async fn main() -> anyhow::Result<()> {
     let mut verts = Vec::new();
     for (name, spec) in vertspecs {
         info!("building docker image for {}", name);
-        let hash = build_docker_image(&spec)
+        let hash = build_docker_image(spec.clone(), &opts)
             .await
             .context("building docker image")?;
         verts.push(Progdef { spec, hash, name });
-    }
-
-    if opts.local {
-        // This part is a little hacky for now.
-        // This code takes the images se just built from our local docker daemon and make them available to minikube.
-        // Need to find a faster way to do this. I takes forever.
-
-        info!("loading images into minikube");
-
-        let current_images = Command::new("minikube")
-            .arg("image")
-            .arg("ls")
-            .stdout(std::process::Stdio::piped())
-            .output()?
-            .stdout;
-        let current_images: &str = from_utf8(&current_images)?;
-
-        for vert in &verts {
-            let image_name = vert.hash.image_name();
-            if current_images.contains(&image_name) {
-                info!("image {} already loaded", image_name);
-                continue;
-            }
-            info!("loading image: {}", &image_name);
-            Command::new("minikube")
-                .arg("image")
-                .arg("load")
-                .arg(image_name)
-                .output()?;
-        }
     }
 
     info!("spin up a docker container for each image");

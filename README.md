@@ -191,7 +191,7 @@ too much burden on progdef implementers.
 - [x] Example Progdefs
 - [x] local demo
 - [ ] remote demo.
-- [ ] Speedup image builds for faster feedback cycles.
+- [x] Speedup image builds for faster feedback cycles.
 - [ ] Generic types and type inference.
 - [ ] Autoscaling, vertical and horizontal.
 - [ ] A python library to simplify writing progdefs.

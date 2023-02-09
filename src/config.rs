@@ -8,10 +8,6 @@ pub struct Opts {
     #[clap(short, long, env = "DAGYO_VERTS")]
     pub vertspec: PathBuf,
 
-    /// DAGYO_QUEUE can be specified as an environment variable or a flag
-    #[clap(short, long, env = "DAGYO_QUEUE")]
-    pub queue: String,
-
     /// Kubernetes namespace to use for this deployment, multiple instances of dagyo can
     /// be run on the same cluster as long as they use different namespaces.
     #[clap(short, long, env = "DAGYO_KUBE_NAMESPACE", default_value = "dagyo")]

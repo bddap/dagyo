@@ -1,58 +1,70 @@
-// Docker is only used for building. We can probably swap it out for podman.
-// Alternatively we could assume a build-time dependency on minikube.
-// Looks like minikube can also build images.
-//
-// When running a cluster locally, the containerd backed for minikube seems
-// more sane. From experience, minikube using the docker backend is unlikely
-// even start. The podman backend seems like it has potential but it's currently
-// experimental and doesn't support all features.
+use std::process::{Command, Stdio};
 
-use std::path::Path;
+use anyhow::{ensure, Context};
+use tracing::info;
 
-use bollard::Docker;
-use futures::TryStreamExt;
+use crate::{
+    config::Opts,
+    vertspec::{ProgdefDesc, VertSpec},
+};
 
-use crate::vertspec::{ProgdefHash, VertSpec};
-
-pub async fn build_docker_image(vs: &VertSpec) -> anyhow::Result<ProgdefHash> {
-    let docker = Docker::connect_with_local_defaults()?;
-    let tar = tarchive(&vs.docker_build_context, &vs.dockerfile)?;
-    let progdef_hash = vs.content_hash(&tar);
-
-    let buildargs = vs
+/// build docker image and upload to the appropriate registry
+pub async fn build_docker_image(vs: VertSpec, opt: &Opts) -> anyhow::Result<ProgdefDesc> {
+    let build_opt_flags: Vec<String> = vs
         .docker_build_args
         .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .map(|(k, v)| format!("--build-arg={}={}", k, v))
         .collect();
 
-    let options = bollard::image::BuildImageOptions {
-        dockerfile: "Dockerfile",
-        buildargs,
-        t: &progdef_hash.image_name(),
-        ..Default::default()
-    };
-    let mut stream = docker.build_image(options, None, Some(tar.into()));
-    while let Some(item) = stream.try_next().await? {
-        if let Some(stream) = item.stream {
-            tracing::debug!("{}", stream.trim_end_matches('\n'));
+    let out = Command::new("docker")
+        .arg("build")
+        .args(build_opt_flags)
+        .arg("--quiet")
+        .arg("--file")
+        .arg(vs.dockerfile.to_str().unwrap())
+        .arg(vs.docker_build_context.to_str().unwrap())
+        .output()?;
+    ensure!(
+        out.status.success(),
+        "docker build failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let image_content_id = String::from_utf8(out.stdout)
+        .context("docker did not output non-utf8")?
+        .trim()
+        .to_string();
+
+    let ret = vs.docker_tag(&image_content_id)?;
+    let tag = ret.image_name();
+
+    let res = Command::new("docker")
+        .arg("tag")
+        .arg(&image_content_id)
+        .arg(&tag)
+        .status()?;
+    ensure!(res.success(), "docker tag failed");
+
+    if opt.local {
+        let out = Command::new("minikube")
+            .arg("image")
+            .arg("ls")
+            .stdout(Stdio::piped())
+            .output()?;
+        let current_images = String::from_utf8(out.stdout)?;
+        if current_images.contains(&tag) {
+            info!("image {} already loaded", tag);
+        } else {
+            info!("loading image: {}", tag);
+            Command::new("minikube")
+                .arg("image")
+                .arg("load")
+                .arg(&tag)
+                .output()?;
         }
-    }
-    Ok(progdef_hash)
-}
-
-/// currently does not heed .dockerignore
-fn tarchive(docker_build_context: &Path, dockerfile: &Path) -> anyhow::Result<Vec<u8>> {
-    if docker_build_context.join("Dockerfile").exists() {
-        anyhow::ensure!(
-            docker_build_context.join("Dockerfile") == dockerfile,
-            "Docker build context may only contain 'Dockerfile' if vertpec points to it. \
-             This is a limitation in the builder."
-        );
+    } else {
+        unimplemented!("this program can't yet upload to remote registry");
     }
 
-    let mut archive = tar::Builder::new(Vec::new());
-    archive.append_dir_all(".", docker_build_context)?;
-    archive.append_path_with_name(dockerfile, "Dockerfile")?;
-    let archive = archive.into_inner()?;
-    Ok(archive)
+    Ok(ret)
 }

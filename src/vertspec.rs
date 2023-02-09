@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -45,38 +45,61 @@ impl VertSpec {
     }
 
     /// a hash that uniquely identifies this vertspecs build
-    pub fn content_hash(&self, build_context_tarred: &[u8]) -> ProgdefHash {
-        let mut hasher = Sha256::new();
-        hasher.update(stable_map_hash(&self.docker_build_args));
-        hasher.update(stable_map_hash(&self.inputs));
-        hasher.update(stable_map_hash(&self.outputs));
-        hasher.update(build_context_tarred);
-        ProgdefHash {
-            hash: hasher.finalize().into(),
-        }
+    pub fn docker_tag(self, tag: &str) -> anyhow::Result<ProgdefDesc> {
+        let hex = tag.strip_prefix("sha256:").ok_or_else(|| {
+            anyhow::anyhow!(
+                "docker build returned an image id that doesn't start with sha256: {}",
+                tag,
+            )
+        })?;
+        ensure!(
+            hex.len() == 64,
+            "docker build returned an image id that doesn't have 64 hex digits: {}",
+            tag,
+        );
+        ensure!(
+            hex.chars().all(|c| c.is_ascii_hexdigit()),
+            "docker build returned an image id that isn't hex: {}",
+            tag,
+        );
+
+        Ok(ProgdefDesc {
+            docker_tag: tag.to_string(),
+            vertspec: self,
+        })
     }
 }
 
 #[derive(Clone)]
-pub struct ProgdefHash {
-    hash: [u8; 32],
+pub struct ProgdefDesc {
+    /// This tag starts with: "sha256:". It represents the hash returned by `docker build -q`
+    docker_tag: String,
+    vertspec: VertSpec,
 }
 
-impl Debug for ProgdefHash {
+impl Debug for ProgdefDesc {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ProgdefHash({})", self.shorthex())
     }
 }
 
-impl ProgdefHash {
+impl ProgdefDesc {
+    fn hash(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(stable_map_hash(&self.vertspec.docker_build_args));
+        hasher.update(stable_map_hash(&self.vertspec.inputs));
+        hasher.update(stable_map_hash(&self.vertspec.outputs));
+        hasher.update(self.docker_tag.as_bytes());
+        hasher.finalize().into()
+    }
+
     pub fn image_name(&self) -> String {
-        // fyi docker specifically rejects 64 character hex strings
-        format!("dagyo_{}", self.shorthex())
+        format!("vert_{}", self.shorthex())
     }
 
     /// convert to hex the first 64 bits of this hash
     pub fn shorthex(&self) -> String {
-        self.hash
+        self.hash()
             .iter()
             .map(|b| format!("{:02x}", b))
             .take(16)
@@ -85,7 +108,7 @@ impl ProgdefHash {
 
     /// convert to hex the first 128 bits of this hash
     fn hex128(&self) -> String {
-        self.hash
+        self.hash()
             .iter()
             .map(|b| format!("{:02x}", b))
             .take(32)
@@ -132,7 +155,7 @@ impl Display for Progname {
 #[derive(Debug, Clone)]
 pub struct Progdef {
     pub spec: VertSpec,
-    pub hash: ProgdefHash,
+    pub hash: ProgdefDesc,
     pub name: Progname,
 }
 
