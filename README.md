@@ -59,7 +59,7 @@ A program that takes data flow trees and spawns dagyo workers to execute them. T
 
 A string representing the data that is carried over a stream. Every typename defines its own serialization. An edge from one progdef's output and another progdef's input is valid if and only if the two typenames are equal.
 
-Each typename *should* have human readable documentation which describes the type and serialization.
+Each typename *should* have human readable documentation which describes the type and serialization. Protobufs for defining types could be an execllent fit.
 
 Each type needs to be convertable to and from an array of octets.
 
