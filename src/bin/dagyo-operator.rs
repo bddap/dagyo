@@ -1,10 +1,14 @@
+use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
+use anyhow::anyhow as ah;
 use futures::StreamExt;
 use itertools::Itertools;
-use k8s_openapi::api::core::v1::Container;
-use k8s_openapi::api::core::v1::{ConfigMap, Pod, PodSpec};
-use kube::api::{Patch, PatchParams};
+use k8s_openapi::api::core::v1::{
+    ConfigMap, EnvVar, Pod, PodSpec, Service, ServicePort, ServiceSpec,
+};
+use k8s_openapi::api::core::v1::{Container, ContainerPort};
+use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
 use kube::{
     core::ObjectMeta,
     runtime::{
@@ -16,6 +20,10 @@ use kube::{Api, Client, CustomResource};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+const MB_HOSTNAME: &str = "dagyo-mq";
+const MB_URL: &str = "amqp://guest:guest@dagyo-mq:5672";
+const MB_PORT: u16 = 5672;
 
 #[derive(Error, Debug)]
 enum DagyoError {
@@ -31,15 +39,253 @@ enum DagyoError {
 struct ClusterConfig {
     executors: HashSet<Executor>,
     sidecar_image: String,
+    scheduler_image: String,
+
+    /// Image of a message broker supporting the ampq protocol.
+    #[serde(default = "default_mb_image")]
+    message_broker_image: String,
+}
+
+fn default_mb_image() -> String {
+    "rabbitmq:3.11".to_string()
+}
+
+impl DagyoCluster {
+    fn target_state(&self) -> Deploy {
+        let executors: Vec<Pod> = self
+            .spec
+            .executors
+            .iter()
+            .map(|executor| {
+                let containers = [
+                    Container {
+                        image: Some(executor.image.clone()),
+                        name: "executor".into(),
+                        ..Container::default()
+                    },
+                    Container {
+                        image: Some(self.spec.sidecar_image.clone()),
+                        name: "sidecar".into(),
+                        env: Some(vec![EnvVar {
+                            name: "DAGYO_MESSAGE_BROKER".into(),
+                            value: Some(MB_URL.into()),
+                            ..EnvVar::default()
+                        }]),
+                        ..Container::default()
+                    },
+                ]
+                .to_vec();
+                Pod {
+                    metadata: ObjectMeta {
+                        name: Some(executor.image.clone()),
+                        ..ObjectMeta::default()
+                    },
+                    spec: Some(PodSpec {
+                        containers,
+                        ..PodSpec::default()
+                    }),
+                    ..Pod::default()
+                }
+            })
+            .collect_vec();
+
+        let broker_labels = [("app".to_string(), "dagyo-message-broker".to_string())];
+        let broker = Pod {
+            metadata: ObjectMeta {
+                name: Some("dagyo-message-broker".to_string()),
+                labels: Some(broker_labels.clone().into()),
+                ..Default::default()
+            },
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "dagyo-message-broker".to_string(),
+                    image: Some(self.spec.message_broker_image.clone()),
+                    ports: Some(vec![ContainerPort {
+                        container_port: MB_PORT.into(),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            status: None,
+        };
+        let broker_service = Service {
+            metadata: ObjectMeta {
+                name: Some(MB_HOSTNAME.to_owned()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                selector: Some(broker_labels.into()),
+                ports: Some(vec![ServicePort {
+                    port: MB_PORT.into(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let scheduler_labels = [("app".to_string(), "dagyo-scheduler".to_string())];
+        let scheduler = Pod {
+            metadata: ObjectMeta {
+                name: Some("dagyo-scheduler".to_string()),
+                labels: Some(scheduler_labels.clone().into()),
+                ..Default::default()
+            },
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "dagyo-scheduler".to_string(),
+                    image: Some(self.spec.scheduler_image.clone()),
+                    env: Some(vec![EnvVar {
+                        name: "DAGYO_MESSAGE_BROKER".into(),
+                        value: Some(MB_URL.into()),
+                        ..EnvVar::default()
+                    }]),
+                    ports: Some(vec![ContainerPort {
+                        container_port: 80,
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            status: None,
+        };
+        let scheduler_service = Service {
+            metadata: ObjectMeta {
+                name: Some("dagyo-scheduler".to_string()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                selector: Some(scheduler_labels.into()),
+                ports: Some(vec![ServicePort {
+                    port: 80,
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        Deploy {
+            pods: executors
+                .into_iter()
+                .chain([broker, scheduler])
+                .map(|pod| (pod.metadata.name.clone().unwrap(), pod))
+                .collect(),
+            services: [
+                (
+                    broker_service.metadata.name.clone().unwrap(),
+                    broker_service,
+                ),
+                (
+                    scheduler_service.metadata.name.clone().unwrap(),
+                    scheduler_service,
+                ),
+            ]
+            .into(),
+        }
+    }
+
+    async fn current_state(&self, cl: &Client) -> Result<Deploy, DagyoError> {
+        let mut ret = Deploy {
+            pods: Default::default(),
+            services: Default::default(),
+        };
+        let uid = self.uid()?;
+
+        for service in self
+            .service_client(cl)?
+            .list(&ListParams::default())
+            .await?
+            .items
+        {
+            if !service
+                .metadata
+                .owner_references
+                .iter()
+                .flatten()
+                .any(|or| or.uid == uid)
+            {
+                continue;
+            }
+            let name = service
+                .metadata
+                .name
+                .clone()
+                .ok_or_else(|| ah!("found a running service with no name"))?;
+            assert!(ret.services.insert(name, service).is_none());
+        }
+
+        for pod in self
+            .pod_client(cl)?
+            .list(&ListParams::default())
+            .await?
+            .items
+        {
+            if !pod
+                .metadata
+                .owner_references
+                .iter()
+                .flatten()
+                .any(|or| or.uid == uid)
+            {
+                continue;
+            }
+            let name = pod
+                .metadata
+                .name
+                .clone()
+                .ok_or_else(|| ah!("found a running pod with no name"))?;
+            assert!(ret.pods.insert(name, pod).is_none());
+        }
+
+        Ok(ret)
+    }
+
+    fn namespace(&self) -> Result<&str, DagyoError> {
+        self.metadata
+            .namespace
+            .as_deref()
+            .ok_or_else(|| DagyoError::Other(ah!("missing .metadata.namespace")))
+    }
+
+    fn uid(&self) -> Result<&str, DagyoError> {
+        self.metadata
+            .uid
+            .as_deref()
+            .ok_or_else(|| DagyoError::Other(ah!("missing .metadata.uid")))
+    }
+
+    fn pod_client(&self, cl: &Client) -> Result<Api<Pod>, DagyoError> {
+        Ok(Api::<Pod>::namespaced(cl.clone(), self.namespace()?))
+    }
+
+    fn service_client(&self, cl: &Client) -> Result<Api<Service>, DagyoError> {
+        Ok(Api::<Service>::namespaced(cl.clone(), self.namespace()?))
+    }
+
+    fn error_policy(self: Arc<Self>, _: &DagyoError, _ctx: Arc<Client>) -> Action {
+        Action::requeue(Duration::from_secs(60))
+    }
+
+    async fn reconcile(self: Arc<Self>, ctx: Arc<Client>) -> Result<Action, DagyoError> {
+        let pod_client = self.pod_client(&ctx)?;
+        let service_client = self.service_client(&ctx)?;
+        let target = self.target_state();
+        let actual = self.current_state(&ctx).await?;
+
+        let delta = actual.plan(&target);
+        delta.apply(&pod_client, &service_client).await?;
+
+        Ok(Action::requeue(Duration::from_secs(300)))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Hash, Eq, PartialEq)]
 struct Executor {
     image: String,
-}
-
-fn error_policy(_: Arc<DagyoCluster>, _: &DagyoError, _ctx: Arc<Client>) -> Action {
-    Action::requeue(Duration::from_secs(60))
 }
 
 #[tokio::main]
@@ -50,7 +296,7 @@ async fn main() -> anyhow::Result<()> {
     let cms = Api::<ConfigMap>::all(client);
     Controller::new(cmgs, watcher::Config::default())
         .owns(cms, watcher::Config::default())
-        .run(reconcile, error_policy, context)
+        .run(DagyoCluster::reconcile, DagyoCluster::error_policy, context)
         .for_each(|res| async move {
             match res {
                 Ok(o) => println!("reconciled {:?}", o),
@@ -61,50 +307,100 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn reconcile(dc: Arc<DagyoCluster>, ctx: Arc<Client>) -> Result<Action, DagyoError> {
-    let namespace = dc
-        .metadata
-        .namespace
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("missing .metadata.namespace"))?;
-    let name = dc
-        .metadata
-        .name
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("missing .metadata.name"))?;
-    let client = Api::<Pod>::namespaced(Client::clone(&ctx), namespace);
+#[derive(Default)]
+struct Deploy {
+    pods: HashMap<String, Pod>,
+    services: HashMap<String, Service>,
+}
 
-    let pod_for = |executor: &Executor| -> Pod {
-        let containers = [
-            Container {
-                image: Some(executor.image.clone()),
-                name: "executor".into(),
-                ..Container::default()
-            },
-            Container {
-                image: Some(dc.spec.sidecar_image.clone()),
-                name: "sidecar".into(),
-                ..Container::default()
-            },
-        ]
-        .to_vec();
-        Pod {
-            metadata: ObjectMeta {
-                name: Some(executor.image.clone()),
-                ..ObjectMeta::default()
-            },
-            spec: Some(PodSpec {
-                containers,
-                ..PodSpec::default()
-            }),
-            ..Pod::default()
+impl Deploy {
+    fn plan(&self, desired: &Deploy) -> Delta {
+        let mut delete = Deploy::default();
+        for (name, pod) in &self.pods {
+            if desired.pods.contains_key(name) {
+                continue;
+            }
+            delete.pods.insert(name.clone(), pod.clone());
         }
-    };
+        for (name, service) in &self.services {
+            if desired.services.contains_key(name) {
+                continue;
+            }
+            delete.services.insert(name.clone(), service.clone());
+        }
 
-    let pods = dc.spec.executors.iter().map(pod_for).collect_vec();
-    client
-        .patch(name, &PatchParams::default(), &Patch::Apply(&pods))
-        .await?;
+        let mut modify = Deploy::default();
+        for (name, pod) in &self.pods {
+            if let Some(desired_pod) = desired.pods.get(name) {
+                if pod != desired_pod {
+                    modify.pods.insert(name.clone(), desired_pod.clone());
+                }
+            }
+        }
+        for (name, service) in &self.services {
+            if let Some(desired_service) = desired.services.get(name) {
+                if service != desired_service {
+                    modify
+                        .services
+                        .insert(name.clone(), desired_service.clone());
+                }
+            }
+        }
 
-    Ok(Action::requeue(Duration::from_secs(300)))
+        let mut create = Deploy::default();
+        for (name, pod) in &desired.pods {
+            if !self.pods.contains_key(name) {
+                create.pods.insert(name.clone(), pod.clone());
+            }
+        }
+        for (name, service) in &desired.services {
+            if !self.services.contains_key(name) {
+                create.services.insert(name.clone(), service.clone());
+            }
+        }
+
+        Delta {
+            create,
+            modify,
+            delete,
+        }
+    }
+}
+
+struct Delta {
+    delete: Deploy,
+    modify: Deploy,
+    create: Deploy,
+}
+
+impl Delta {
+    async fn apply(&self, pc: &Api<Pod>, sc: &Api<Service>) -> Result<(), DagyoError> {
+        // delete
+        for name in self.delete.pods.keys() {
+            pc.delete(name, &DeleteParams::default()).await?;
+        }
+        for name in self.delete.services.keys() {
+            sc.delete(name, &DeleteParams::default()).await?;
+        }
+
+        // modify
+        for (name, pod) in &self.modify.pods {
+            pc.patch(name, &PatchParams::default(), &Patch::Apply(pod))
+                .await?;
+        }
+        for (name, service) in &self.modify.services {
+            sc.patch(name, &PatchParams::default(), &Patch::Apply(service))
+                .await?;
+        }
+
+        // create
+        for pod in self.create.pods.values() {
+            pc.create(&PostParams::default(), pod).await?;
+        }
+        for service in self.create.services.values() {
+            sc.create(&PostParams::default(), service).await?;
+        }
+
+        Ok(())
+    }
 }
