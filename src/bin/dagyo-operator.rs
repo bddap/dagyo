@@ -1,13 +1,16 @@
 use std::collections::HashMap;
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow as ah;
+use clap::Parser;
 use futures::StreamExt;
 use itertools::Itertools;
+use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, EnvVar, Pod, PodSpec, Service, ServicePort, ServiceSpec,
+    ConfigMap, EnvVar, Pod, PodSpec, PodTemplateSpec, Service, ServicePort, ServiceSpec,
 };
 use k8s_openapi::api::core::v1::{Container, ContainerPort};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
 use kube::{
     core::ObjectMeta,
@@ -16,13 +19,91 @@ use kube::{
         watcher,
     },
 };
-use kube::{Api, Client, CustomResource};
+use kube::{Api, Client, CustomResource, CustomResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const MB_HOSTNAME: &str = "dagyo-mq";
-const MB_URL: &str = "amqp://guest:guest@dagyo-mq:5672";
+#[derive(Parser, Debug, Clone)]
+pub struct Opts {
+    /// Output the yaml crd (custom resource description) for this operator then exit.
+    #[clap(long)]
+    pub crd: bool,
+
+    /// Output the yaml deployment for this operator then exit.
+    #[clap(long, conflicts_with = "crd")]
+    pub deployment: bool,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let opts = Opts::parse();
+    if opts.crd {
+        let crd = <DagyoCluster as CustomResourceExt>::crd();
+        serde_yaml::to_writer(std::io::stdout(), &crd)?;
+        return Ok(());
+    }
+
+    if opts.deployment {
+        let deploy = serde_yaml::to_string(&deployment())?;
+        println!("{}", deploy);
+        return Ok(());
+    }
+
+    let client = Client::try_default().await?;
+    let context = Arc::new(client.clone());
+    let cmgs = Api::<DagyoCluster>::all(client.clone());
+    let cms = Api::<ConfigMap>::all(client);
+    Controller::new(cmgs, watcher::Config::default())
+        .owns(cms, watcher::Config::default())
+        .run(DagyoCluster::reconcile, DagyoCluster::error_policy, context)
+        .for_each(|res| async move {
+            match res {
+                Ok(o) => println!("reconciled {:?}", o),
+                Err(e) => println!("reconcile failed: {:?}", e),
+            }
+        })
+        .await;
+    Ok(())
+}
+
+fn deployment() -> Deployment {
+    let labels = [("app".to_string(), "dagyo-operator".to_string())];
+    Deployment {
+        metadata: ObjectMeta {
+            name: Some("dagyo-operator".to_string()),
+            labels: Some(labels.clone().into()),
+            ..Default::default()
+        },
+        spec: Some(DeploymentSpec {
+            replicas: Some(1),
+            selector: LabelSelector {
+                match_labels: Some(labels.clone().into()),
+                ..Default::default()
+            },
+            template: PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(labels.into()),
+                    ..Default::default()
+                }),
+                spec: Some(PodSpec {
+                    containers: vec![Container {
+                        name: "dagyo-operator".to_string(),
+                        image: Some("dagyo-operator".to_string()),
+                        image_pull_policy: Some("IfNotPresent".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+const MB_HOSTNAME: &str = "dagyo-message-broker";
+const MB_URL: &str = "amqp://guest:guest@dagyo-message-broker:5672";
 const MB_PORT: u16 = 5672;
 
 #[derive(Error, Debug)]
@@ -35,15 +116,32 @@ enum DagyoError {
 
 /// A custom resource
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "dagyo", version = "v1", kind = "DagyoCluster", namespaced)]
+#[kube(
+    group = "dagyo.dagyo",
+    version = "v1",
+    kind = "DagyoCluster",
+    namespaced
+)]
 struct ClusterConfig {
-    executors: HashSet<Executor>,
+    executors: Vec<Executor>,
+
+    #[serde(default = "default_sidecar_image")]
     sidecar_image: String,
+
+    #[serde(default = "default_scheduler_image")]
     scheduler_image: String,
 
     /// Image of a message broker supporting the ampq protocol.
     #[serde(default = "default_mb_image")]
     message_broker_image: String,
+}
+
+fn default_sidecar_image() -> String {
+    "dagyo-sidecar".to_string()
+}
+
+fn default_scheduler_image() -> String {
+    "dagyo-scheduler".to_string()
 }
 
 fn default_mb_image() -> String {
@@ -60,12 +158,14 @@ impl DagyoCluster {
                 let containers = [
                     Container {
                         image: Some(executor.image.clone()),
-                        name: "executor".into(),
+                        image_pull_policy: Some("IfNotPresent".to_string()),
+                        name: "dagyo-executor".into(),
                         ..Container::default()
                     },
                     Container {
                         image: Some(self.spec.sidecar_image.clone()),
-                        name: "sidecar".into(),
+                        image_pull_policy: Some("IfNotPresent".to_string()),
+                        name: "dagyo-sidecar".into(),
                         env: Some(vec![EnvVar {
                             name: "DAGYO_MESSAGE_BROKER".into(),
                             value: Some(MB_URL.into()),
@@ -100,6 +200,7 @@ impl DagyoCluster {
                 containers: vec![Container {
                     name: "dagyo-message-broker".to_string(),
                     image: Some(self.spec.message_broker_image.clone()),
+                    image_pull_policy: Some("IfNotPresent".to_string()),
                     ports: Some(vec![ContainerPort {
                         container_port: MB_PORT.into(),
                         ..Default::default()
@@ -137,6 +238,7 @@ impl DagyoCluster {
                 containers: vec![Container {
                     name: "dagyo-scheduler".to_string(),
                     image: Some(self.spec.scheduler_image.clone()),
+                    image_pull_policy: Some("IfNotPresent".to_string()),
                     env: Some(vec![EnvVar {
                         name: "DAGYO_MESSAGE_BROKER".into(),
                         value: Some(MB_URL.into()),
@@ -286,25 +388,6 @@ impl DagyoCluster {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Hash, Eq, PartialEq)]
 struct Executor {
     image: String,
-}
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let client = Client::try_default().await?;
-    let context = Arc::new(client.clone());
-    let cmgs = Api::<DagyoCluster>::all(client.clone());
-    let cms = Api::<ConfigMap>::all(client);
-    Controller::new(cmgs, watcher::Config::default())
-        .owns(cms, watcher::Config::default())
-        .run(DagyoCluster::reconcile, DagyoCluster::error_policy, context)
-        .for_each(|res| async move {
-            match res {
-                Ok(o) => println!("reconciled {:?}", o),
-                Err(e) => println!("reconcile failed: {:?}", e),
-            }
-        })
-        .await;
-    Ok(())
 }
 
 #[derive(Default)]
