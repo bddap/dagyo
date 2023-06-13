@@ -1,6 +1,12 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: dagyo-system
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
+  namespace: dagyo-system
   name: dagyo-operator-service-account
   labels:
     heritage: dagyo
@@ -9,6 +15,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: dagyoclusters.dagyo.dagyo
+  namespace: dagyo-system
 spec:
   group: dagyo.dagyo
   names:
@@ -52,43 +59,21 @@ spec:
       subresources: {}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRole
 metadata:
-  name: dagyo-operator-role-binding
-  labels:
-    heritage: dagyo
-roleRef:
-  kind: Role
-  name: dagyo-operator-role
-subjects:
-  - kind: ServiceAccount
-    name: dagyo-operator-service-account
----
-apiVersion: v1
-kind: Pod
-metadata:
-  name: dagyo-operator-pod
-  labels:
-    heritage: dagyo
-    app: dagyo-operator-pod
-spec:
-  serviceAccountName: dagyo-operator-service-account
-  containers:
-    - name: dagyo-operator
-      image: dagyo-operator
-      imagePullPolicy: IfNotPresent
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: dagyo-operator-role
+  name: dagyo-operator-cluster-role
+  namespace: dagyo-system
   labels:
     heritage: dagyo
 rules:
   - apiGroups:
       - ""
+      - "dagyo.dagyo"
     resources:
       - "pod"
+      - "configmaps"
+      - "configmap"
+      - "dagyoclusters"
     verbs:
       - "get"
       - "list"
@@ -97,25 +82,50 @@ rules:
       - "update"
       - "patch"
       - "delete"
-
-  - apiGroups:
-      - ""
-    resources:
-      - "configmaps"
-    verbs:
-      - "list"
-
-  - apiGroups:
-      - "dagyo.dagyo"
-    resources:
-      - "dagyoclusters"
-    verbs:
-      - "list"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dagyo-operator-cluster-role-binding
+  namespace: dagyo-system
+  labels:
+    heritage: dagyo
+roleRef:
+  kind: ClusterRole
+  name: dagyo-operator-cluster-role
+subjects:
+  - kind: ServiceAccount
+    name: dagyo-operator-service-account
+    namespace: dagyo-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dagyo-operator-deployment
+  namespace: dagyo-system
+  labels:
+    heritage: dagyo
+spec:
+  selector:
+    matchLabels:
+      app: dagyo-operator-pod
+  template:
+    metadata:
+      labels:
+        heritage: dagyo
+        app: dagyo-operator-pod
+    spec:
+      serviceAccountName: dagyo-operator-service-account
+      containers:
+        - name: dagyo-operator-container
+          image: dagyo-operator
+          imagePullPolicy: IfNotPresent
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dagyo-scheduler-deployment
+  namespace: dagyo-system
   labels:
     heritage: dagyo
 spec:
@@ -139,6 +149,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: dag-scheduler
+  namespace: dagyo-system
   labels:
     heritage: dagyo
 spec:

@@ -28,9 +28,10 @@ async fn main() -> anyhow::Result<()> {
     let _ = Opts::parse();
 
     let client = Client::try_default().await?;
+
     let context = Arc::new(client.clone());
-    let cmgs = Api::<DagyoCluster>::all(client.clone());
-    let cms = Api::<ConfigMap>::all(client);
+    let cmgs = Api::<DagyoCluster>::namespaced(client.clone(), client.default_namespace());
+    let cms = Api::<ConfigMap>::namespaced(client.clone(), client.default_namespace());
     Controller::new(cmgs, watcher::Config::default())
         .owns(cms, watcher::Config::default())
         .run(DagyoCluster::reconcile, DagyoCluster::error_policy, context)
@@ -66,7 +67,6 @@ enum DagyoError {
 )]
 struct ClusterConfig {
     executors: Vec<Executor>,
-
     sidecar_image: String,
 }
 

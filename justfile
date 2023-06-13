@@ -28,3 +28,6 @@ check:
     just build-images
 
 
+# some useful tools for debugging include:
+# kdash or k9s - tui kubernetes dashboards
+
