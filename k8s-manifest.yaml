@@ -1,21 +1,18 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: dagyo-system
+  name: dagyo-default
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  namespace: dagyo-system
   name: dagyo-operator-service-account
-  labels:
-    heritage: dagyo
+  namespace: dagyo-default
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: dagyoclusters.dagyo.dagyo
-  namespace: dagyo-system
 spec:
   group: dagyo.dagyo
   names:
@@ -59,20 +56,18 @@ spec:
       subresources: {}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
-  name: dagyo-operator-cluster-role
-  namespace: dagyo-system
-  labels:
-    heritage: dagyo
+  name: dagyo-operator-role
+  namespace: dagyo-default
 rules:
+  # TODO, these rules can be split up to be more fine grained
   - apiGroups:
       - ""
       - "dagyo.dagyo"
     resources:
       - "pod"
       - "configmaps"
-      - "configmap"
       - "dagyoclusters"
     verbs:
       - "get"
@@ -84,27 +79,22 @@ rules:
       - "delete"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: dagyo-operator-cluster-role-binding
-  namespace: dagyo-system
-  labels:
-    heritage: dagyo
+  name: dagyo-operator-role-binding
+  namespace: dagyo-default
 roleRef:
-  kind: ClusterRole
-  name: dagyo-operator-cluster-role
+  kind: Role
+  name: dagyo-operator-role
 subjects:
   - kind: ServiceAccount
     name: dagyo-operator-service-account
-    namespace: dagyo-system
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dagyo-operator-deployment
-  namespace: dagyo-system
-  labels:
-    heritage: dagyo
+  namespace: dagyo-default
 spec:
   selector:
     matchLabels:
@@ -112,7 +102,6 @@ spec:
   template:
     metadata:
       labels:
-        heritage: dagyo
         app: dagyo-operator-pod
     spec:
       serviceAccountName: dagyo-operator-service-account
@@ -125,9 +114,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dagyo-scheduler-deployment
-  namespace: dagyo-system
-  labels:
-    heritage: dagyo
+  namespace: dagyo-default
 spec:
   selector:
     matchLabels:
@@ -144,17 +131,3 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: dag-scheduler
-  namespace: dagyo-system
-  labels:
-    heritage: dagyo
-spec:
-  type: ClusterIP
-  ports:
-    - port: 80
-  selector:
-    app: dagyo-scheduler

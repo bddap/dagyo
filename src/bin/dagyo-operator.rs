@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow as ah;
-use clap::Parser;
 use futures::StreamExt;
 use itertools::Itertools;
 use k8s_openapi::api::core::v1::Container;
@@ -20,28 +19,35 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Parser, Debug, Clone)]
-pub struct Opts {}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = Opts::parse();
+    eprintln!("dagyo-operator starting");
 
     let client = Client::try_default().await?;
 
-    let context = Arc::new(client.clone());
-    let cmgs = Api::<DagyoCluster>::namespaced(client.clone(), client.default_namespace());
-    let cms = Api::<ConfigMap>::namespaced(client.clone(), client.default_namespace());
-    Controller::new(cmgs, watcher::Config::default())
-        .owns(cms, watcher::Config::default())
-        .run(DagyoCluster::reconcile, DagyoCluster::error_policy, context)
-        .for_each(|res| async move {
-            match res {
-                Ok(o) => println!("reconciled {:?}", o),
-                Err(e) => println!("reconcile failed: {:?}", e),
-            }
-        })
-        .await;
+    Controller::new(
+        Api::<DagyoCluster>::default_namespaced(client.clone()),
+        watcher::Config::default(),
+    )
+    .owns(
+        // TODO: this probably needs to be modified to be the pods that this operator creates
+        Api::<ConfigMap>::default_namespaced(client.clone()),
+        watcher::Config::default(),
+    )
+    .run(
+        DagyoCluster::reconcile,
+        DagyoCluster::error_policy,
+        Arc::new(Context {
+            pods: Api::<Pod>::default_namespaced(client),
+        }),
+    )
+    .for_each(|res| async move {
+        match res {
+            Ok(o) => println!("reconciled {:?}", o),
+            Err(e) => println!("reconcile failed: {:?}", e),
+        }
+    })
+    .await;
     Ok(())
 }
 
@@ -119,18 +125,13 @@ impl DagyoCluster {
         }
     }
 
-    async fn current_state(&self, cl: &Client) -> Result<Deploy, DagyoError> {
+    async fn current_state(&self, ctx: &Context) -> Result<Deploy, DagyoError> {
         let mut ret = Deploy {
             pods: Default::default(),
         };
         let uid = self.uid()?;
 
-        for pod in self
-            .pod_client(cl)?
-            .list(&ListParams::default())
-            .await?
-            .items
-        {
+        for pod in ctx.pods.list(&ListParams::default()).await?.items {
             if !pod
                 .metadata
                 .owner_references
@@ -151,13 +152,6 @@ impl DagyoCluster {
         Ok(ret)
     }
 
-    fn namespace(&self) -> Result<&str, DagyoError> {
-        self.metadata
-            .namespace
-            .as_deref()
-            .ok_or_else(|| DagyoError::Other(ah!("missing .metadata.namespace")))
-    }
-
     fn uid(&self) -> Result<&str, DagyoError> {
         self.metadata
             .uid
@@ -165,24 +159,23 @@ impl DagyoCluster {
             .ok_or_else(|| DagyoError::Other(ah!("missing .metadata.uid")))
     }
 
-    fn pod_client(&self, cl: &Client) -> Result<Api<Pod>, DagyoError> {
-        Ok(Api::<Pod>::namespaced(cl.clone(), self.namespace()?))
-    }
-
-    fn error_policy(self: Arc<Self>, _: &DagyoError, _ctx: Arc<Client>) -> Action {
+    fn error_policy(self: Arc<Self>, _: &DagyoError, _ctx: Arc<Context>) -> Action {
         Action::requeue(Duration::from_secs(60))
     }
 
-    async fn reconcile(self: Arc<Self>, ctx: Arc<Client>) -> Result<Action, DagyoError> {
-        let pod_client = self.pod_client(&ctx)?;
+    async fn reconcile(self: Arc<Self>, ctx: Arc<Context>) -> Result<Action, DagyoError> {
         let target = self.target_state();
         let actual = self.current_state(&ctx).await?;
 
         let delta = actual.plan(&target);
-        delta.apply(&pod_client).await?;
+        delta.apply(&ctx).await?;
 
         Ok(Action::requeue(Duration::from_secs(300)))
     }
+}
+
+struct Context {
+    pods: Api<Pod>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Hash, Eq, PartialEq)]
@@ -236,21 +229,21 @@ struct Delta {
 }
 
 impl Delta {
-    async fn apply(&self, pc: &Api<Pod>) -> Result<(), DagyoError> {
+    async fn apply(&self, Context { pods }: &Context) -> Result<(), DagyoError> {
         // delete
         for name in self.delete.pods.keys() {
-            pc.delete(name, &DeleteParams::default()).await?;
+            pods.delete(name, &DeleteParams::default()).await?;
         }
 
         // modify
         for (name, pod) in &self.modify.pods {
-            pc.patch(name, &PatchParams::default(), &Patch::Apply(pod))
+            pods.patch(name, &PatchParams::default(), &Patch::Apply(pod))
                 .await?;
         }
 
         // create
         for pod in self.create.pods.values() {
-            pc.create(&PostParams::default(), pod).await?;
+            pods.create(&PostParams::default(), pod).await?;
         }
 
         Ok(())
