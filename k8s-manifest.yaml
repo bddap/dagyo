@@ -75,7 +75,7 @@ rules:
       - ""
       - "dagyo.dagyo"
     resources:
-      - "pod"
+      - "pods"
       - "configmaps"
       - "dagyoclusters"
     verbs:
@@ -86,18 +86,6 @@ rules:
       - "update"
       - "patch"
       - "delete"
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: dagyo-operator-role-binding
-  namespace: dagyo-default
-roleRef:
-  kind: Role
-  name: dagyo-operator-role
-subjects:
-  - kind: ServiceAccount
-    name: dagyo-operator-service-account
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -118,6 +106,18 @@ spec:
         - name: dagyo-operator-container
           image: dagyo-operator
           imagePullPolicy: IfNotPresent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dagyo-operator-role-binding
+  namespace: dagyo-default
+roleRef:
+  kind: Role
+  name: dagyo-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: dagyo-operator-service-account
 ---
 apiVersion: apps/v1
 kind: Deployment

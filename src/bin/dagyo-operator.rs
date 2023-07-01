@@ -65,8 +65,8 @@ fn target_state(cluster: &DagyoCluster) -> Deploy {
     let executors: Vec<Pod> = cluster
         .spec
         .executors
-        .values()
-        .map(|executor| {
+        .iter()
+        .map(|(name, executor)| {
             let containers = [
                 Container {
                     image: Some(executor.image.clone()),
@@ -89,7 +89,7 @@ fn target_state(cluster: &DagyoCluster) -> Deploy {
             .to_vec();
             Pod {
                 metadata: ObjectMeta {
-                    name: Some(executor.image.clone()),
+                    name: Some(rfc1123(&format!("{}-{}", name, executor.image))),
                     ..ObjectMeta::default()
                 },
                 spec: Some(PodSpec {
@@ -227,6 +227,25 @@ impl Delta {
 
         Ok(())
     }
+}
+
+/// tweak a string to make it a valid lowercase rfc1123 subdomain
+fn rfc1123(inp: &str) -> String {
+    let mut ret: String = inp
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | '0'..='9' | '-' | '.' => c,
+            _ => '-',
+        })
+        .collect();
+    if !ret.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        ret.insert(0, 'a');
+    }
+    if !ret.ends_with(|c: char| c.is_ascii_alphabetic()) {
+        ret.push('a');
+    }
+    ret
 }
 
 #[cfg(test)]
