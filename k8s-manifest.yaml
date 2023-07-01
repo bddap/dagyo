@@ -30,17 +30,26 @@ spec:
           description: Auto-generated derived type for ClusterConfig via `CustomResource`
           properties:
             spec:
-              description: A custom resource
               properties:
                 executors:
-                  items:
+                  additionalProperties:
                     properties:
                       image:
                         type: string
+                      inputs:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      outputs:
+                        additionalProperties:
+                          type: string
+                        type: object
                     required:
                       - image
+                      - inputs
+                      - outputs
                     type: object
-                  type: array
+                  type: object
                 sidecar_image:
                   type: string
               required:

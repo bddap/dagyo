@@ -14,12 +14,12 @@ use petgraph::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::vertspec::{Progdef, Progname};
+use crate::vertspec::{ProgName, Progdef};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// The serializable representation of a procedure.
 pub struct Proc {
-    pub nodes: Vec<Progname>,
+    pub nodes: Vec<ProgName>,
 
     /// Which output is connected to which input
     /// the structure of the graph is validated later,
@@ -32,7 +32,7 @@ impl Proc {
         let mut graph = DiGraph::new();
         let mut idxes = HashMap::new();
 
-        let progdefs: HashMap<Progname, Progdef> = progdefs
+        let progdefs: HashMap<String, Progdef> = progdefs
             .iter()
             .map(|progdef| (progdef.name.clone(), progdef.clone()))
             .collect();

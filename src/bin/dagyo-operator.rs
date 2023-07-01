@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow as ah;
+use dagyo::common::DagyoCluster;
 use futures::StreamExt;
 use itertools::Itertools;
 use k8s_openapi::api::core::v1::Container;
-use k8s_openapi::api::core::v1::{ConfigMap, EnvVar, Pod, PodSpec};
+use k8s_openapi::api::core::v1::{EnvVar, Pod, PodSpec};
 use kube::api::{DeleteParams, ListParams, Patch, PatchParams, PostParams};
 use kube::{
     core::ObjectMeta,
@@ -14,9 +15,7 @@ use kube::{
         watcher,
     },
 };
-use kube::{Api, Client, CustomResource};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use kube::{Api, Client};
 use thiserror::Error;
 
 #[tokio::main]
@@ -30,13 +29,12 @@ async fn main() -> anyhow::Result<()> {
         watcher::Config::default(),
     )
     .owns(
-        // TODO: this probably needs to be modified to be the pods that this operator creates
-        Api::<ConfigMap>::default_namespaced(client.clone()),
+        Api::<Pod>::default_namespaced(client.clone()),
         watcher::Config::default(),
     )
     .run(
-        DagyoCluster::reconcile,
-        DagyoCluster::error_policy,
+        reconcile,
+        error_policy,
         Arc::new(Context {
             pods: Api::<Pod>::default_namespaced(client),
         }),
@@ -52,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // const MB_HOSTNAME: &str = "dagyo-message-broker";
-const MB_URL: &str = "amqp://guest:guest@dagyo-message-broker:5672";
+const MESSAGE_BROKER_URL: &str = "amqp://guest:guest@dagyo-message-broker:5672";
 // const MB_PORT: u16 = 5672;
 
 #[derive(Error, Debug)]
@@ -63,124 +61,105 @@ enum DagyoError {
     Other(#[from] anyhow::Error),
 }
 
-/// A custom resource
-#[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(
-    group = "dagyo.dagyo",
-    version = "v1",
-    kind = "DagyoCluster",
-    namespaced
-)]
-struct ClusterConfig {
-    executors: Vec<Executor>,
-    sidecar_image: String,
+fn target_state(cluster: &DagyoCluster) -> Deploy {
+    let executors: Vec<Pod> = cluster
+        .spec
+        .executors
+        .values()
+        .map(|executor| {
+            let containers = [
+                Container {
+                    image: Some(executor.image.clone()),
+                    image_pull_policy: Some("IfNotPresent".to_string()),
+                    name: "dagyo-executor".into(),
+                    ..Container::default()
+                },
+                Container {
+                    image: Some(cluster.spec.sidecar_image.clone()),
+                    image_pull_policy: Some("IfNotPresent".to_string()),
+                    name: "dagyo-sidecar".into(),
+                    env: Some(vec![EnvVar {
+                        name: "DAGYO_MESSAGE_BROKER".into(),
+                        value: Some(MESSAGE_BROKER_URL.into()),
+                        ..EnvVar::default()
+                    }]),
+                    ..Container::default()
+                },
+            ]
+            .to_vec();
+            Pod {
+                metadata: ObjectMeta {
+                    name: Some(executor.image.clone()),
+                    ..ObjectMeta::default()
+                },
+                spec: Some(PodSpec {
+                    containers,
+                    ..PodSpec::default()
+                }),
+                ..Pod::default()
+            }
+        })
+        .collect_vec();
+
+    Deploy {
+        pods: executors
+            .into_iter()
+            .map(|p| (p.metadata.name.clone().unwrap(), p))
+            .collect(),
+    }
 }
 
-impl DagyoCluster {
-    fn target_state(&self) -> Deploy {
-        let executors: Vec<Pod> = self
-            .spec
-            .executors
+async fn current_state(cluster: &DagyoCluster, ctx: &Context) -> Result<Deploy, DagyoError> {
+    let mut ret = Deploy {
+        pods: Default::default(),
+    };
+    let uid = uid(&cluster)?;
+
+    for pod in ctx.pods.list(&ListParams::default()).await?.items {
+        if !pod
+            .metadata
+            .owner_references
             .iter()
-            .map(|executor| {
-                let containers = [
-                    Container {
-                        image: Some(executor.image.clone()),
-                        image_pull_policy: Some("IfNotPresent".to_string()),
-                        name: "dagyo-executor".into(),
-                        ..Container::default()
-                    },
-                    Container {
-                        image: Some(self.spec.sidecar_image.clone()),
-                        image_pull_policy: Some("IfNotPresent".to_string()),
-                        name: "dagyo-sidecar".into(),
-                        env: Some(vec![EnvVar {
-                            name: "DAGYO_MESSAGE_BROKER".into(),
-                            value: Some(MB_URL.into()),
-                            ..EnvVar::default()
-                        }]),
-                        ..Container::default()
-                    },
-                ]
-                .to_vec();
-                Pod {
-                    metadata: ObjectMeta {
-                        name: Some(executor.image.clone()),
-                        ..ObjectMeta::default()
-                    },
-                    spec: Some(PodSpec {
-                        containers,
-                        ..PodSpec::default()
-                    }),
-                    ..Pod::default()
-                }
-            })
-            .collect_vec();
-
-        Deploy {
-            pods: executors
-                .into_iter()
-                .map(|p| (p.metadata.name.clone().unwrap(), p))
-                .collect(),
+            .flatten()
+            .any(|or| or.uid == uid)
+        {
+            continue;
         }
+        let name = pod
+            .metadata
+            .name
+            .clone()
+            .ok_or_else(|| ah!("found a running pod with no name"))?;
+        assert!(ret.pods.insert(name, pod).is_none());
     }
 
-    async fn current_state(&self, ctx: &Context) -> Result<Deploy, DagyoError> {
-        let mut ret = Deploy {
-            pods: Default::default(),
-        };
-        let uid = self.uid()?;
+    Ok(ret)
+}
 
-        for pod in ctx.pods.list(&ListParams::default()).await?.items {
-            if !pod
-                .metadata
-                .owner_references
-                .iter()
-                .flatten()
-                .any(|or| or.uid == uid)
-            {
-                continue;
-            }
-            let name = pod
-                .metadata
-                .name
-                .clone()
-                .ok_or_else(|| ah!("found a running pod with no name"))?;
-            assert!(ret.pods.insert(name, pod).is_none());
-        }
+fn uid(cluster: &DagyoCluster) -> Result<&str, DagyoError> {
+    cluster
+        .metadata
+        .uid
+        .as_deref()
+        .ok_or_else(|| DagyoError::Other(ah!("missing .metadata.uid")))
+}
 
-        Ok(ret)
-    }
+fn error_policy(_: Arc<DagyoCluster>, _: &DagyoError, _ctx: Arc<Context>) -> Action {
+    Action::requeue(Duration::from_secs(60))
+}
 
-    fn uid(&self) -> Result<&str, DagyoError> {
-        self.metadata
-            .uid
-            .as_deref()
-            .ok_or_else(|| DagyoError::Other(ah!("missing .metadata.uid")))
-    }
+async fn reconcile(cluster: Arc<DagyoCluster>, ctx: Arc<Context>) -> Result<Action, DagyoError> {
+    let target = target_state(&cluster);
+    let actual = current_state(&cluster, &ctx).await?;
 
-    fn error_policy(self: Arc<Self>, _: &DagyoError, _ctx: Arc<Context>) -> Action {
-        Action::requeue(Duration::from_secs(60))
-    }
+    let delta = actual.plan(&target);
+    delta.apply(&ctx).await?;
 
-    async fn reconcile(self: Arc<Self>, ctx: Arc<Context>) -> Result<Action, DagyoError> {
-        let target = self.target_state();
-        let actual = self.current_state(&ctx).await?;
-
-        let delta = actual.plan(&target);
-        delta.apply(&ctx).await?;
-
-        Ok(Action::requeue(Duration::from_secs(300)))
-    }
+    Ok(Action::requeue(Duration::from_secs(300)))
 }
 
 struct Context {
     pods: Api<Pod>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Hash, Eq, PartialEq)]
-struct Executor {
-    image: String,
 }
 
 #[derive(Default)]

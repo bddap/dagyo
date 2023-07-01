@@ -1,10 +1,10 @@
 use std::{
     collections::HashMap,
-    fmt::{Debug, Display, Formatter},
+    fmt::{Debug, Formatter},
     path::{Path, PathBuf},
 };
 
-use anyhow::{ensure, Context};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -26,12 +26,12 @@ impl VertSpec {
     /// read a set of vertspecs from a file
     /// relative paths are considered relative to the vertspec file
     /// paths returned are canonical and absolute
-    pub fn from_file(path: &Path) -> anyhow::Result<HashMap<Progname, Self>> {
+    pub fn from_file(path: &Path) -> anyhow::Result<HashMap<ProgName, Self>> {
         let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let vertspec_file = std::fs::read_to_string(path).with_context(|| {
             format!("failed to read vertspec file at {}", path.to_string_lossy())
         })?;
-        let mut vertspec: HashMap<Progname, VertSpec> = toml::from_str(&vertspec_file)?;
+        let mut vertspec: HashMap<ProgName, VertSpec> = toml::from_str(&vertspec_file)?;
         for v in vertspec.values_mut() {
             v.make_relative_to(&parent)?;
         }
@@ -42,31 +42,6 @@ impl VertSpec {
         self.dockerfile = base.join(&self.dockerfile).canonicalize()?;
         self.docker_build_context = base.join(&self.docker_build_context).canonicalize()?;
         Ok(())
-    }
-
-    /// a hash that uniquely identifies this vertspecs build
-    pub fn docker_tag(self, tag: &str) -> anyhow::Result<ProgdefDesc> {
-        let hex = tag.strip_prefix("sha256:").ok_or_else(|| {
-            anyhow::anyhow!(
-                "docker build returned an image id that doesn't start with sha256: {}",
-                tag,
-            )
-        })?;
-        ensure!(
-            hex.len() == 64,
-            "docker build returned an image id that doesn't have 64 hex digits: {}",
-            tag,
-        );
-        ensure!(
-            hex.chars().all(|c| c.is_ascii_hexdigit()),
-            "docker build returned an image id that isn't hex: {}",
-            tag,
-        );
-
-        Ok(ProgdefDesc {
-            docker_tag: tag.to_string(),
-            vertspec: self,
-        })
     }
 }
 
@@ -130,33 +105,13 @@ fn stable_map_hash(map: &HashMap<String, String>) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Progname(String);
-
-impl Progname {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&str> for Progname {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl Display for Progname {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+pub type ProgName = String;
 
 #[derive(Debug, Clone)]
 pub struct Progdef {
     pub spec: VertSpec,
     pub hash: ProgdefDesc,
-    pub name: Progname,
+    pub name: ProgName,
 }
 
 fn default_build_context() -> PathBuf {
