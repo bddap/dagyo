@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+package dagyo_sidecar;
+
+service DagyoSidecar {
+  rpc TakeJob(stream google.protobuf.Timestamp) returns (Job);
+  rpc GetInputStream(StreamId) returns (stream InputStreamElement);
+  rpc PutOutput(PutOutputRequest) returns (google.protobuf.Empty);
+  rpc CloseOutput(StreamId) returns (google.protobuf.Empty);
+  rpc Panic(PanicRequest) returns (google.protobuf.Empty);
+
+  // This rpc will return when the job is terminated. Executors start a call to this
+  // function before processing. If this call returns, the job has been cancelled.
+  // The executor should gracefully stop processing the job.
+  rpc WaitForStop(Job) returns (google.protobuf.Empty);
+}
+
+message InputStreamElement { bytes mess = 1; }
+
+message Job { uint64 id = 1; }
+
+message StreamId {
+  uint64 job = 1;
+  string name = 2;
+}
+
+message PutOutputRequest {
+  uint64 job = 1;
+  string name = 2;
+  bytes mess = 3;
+}
+
+message PanicRequest {
+  uint64 job = 1;
+  string mess = 2;
+}
