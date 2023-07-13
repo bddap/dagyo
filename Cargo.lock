@@ -685,6 +685,7 @@ dependencies = [
  "petgraph",
  "prost",
  "prost-types",
+ "rand",
  "schemars",
  "serde",
  "serde_json",

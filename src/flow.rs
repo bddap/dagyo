@@ -226,7 +226,7 @@ impl WithPipes {
 #[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq, Debug, Copy)]
 /// Adress for executors to push xor pull from.
 #[serde(transparent)]
-struct MailBox {
+pub struct MailBox {
     addr: Uuid,
 }
 
@@ -237,18 +237,18 @@ impl MailBox {
         }
     }
 
-    fn queue_name(&self) -> String {
+    pub fn queue_name(&self) -> String {
         self.addr.to_string()
     }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct JobDesc {
-    inputs: HashMap<String, MailBox>,
-    outputs: HashMap<String, MailBox>,
-    panic: MailBox,
-    health: MailBox,
-    stop: MailBox,
+    pub inputs: HashMap<String, MailBox>,
+    pub outputs: HashMap<String, MailBox>,
+    pub panic: MailBox,
+    pub health: MailBox,
+    pub stop: MailBox,
 }
 
 pub struct Flow {

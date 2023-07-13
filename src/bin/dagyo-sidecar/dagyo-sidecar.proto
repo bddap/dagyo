@@ -6,19 +6,37 @@ import "google/protobuf/timestamp.proto";
 package dagyo_sidecar;
 
 service DagyoSidecar {
-  rpc TakeJob(stream google.protobuf.Timestamp) returns (Job);
-  rpc GetInputStream(StreamId) returns (stream InputStreamElement);
+  // This rpc takes a stream as input, when this input stream is closed, the job
+  // will be cleaned up. Make sure to keep this stream around while processing
+  // the job.
+  //
+  // The caller must consume all input streams and close all output streams
+  // before closing this input stream. If there are any unresolved streams when
+  // the job is cleaned up, a panic will be triggered and the entire flow will
+  // be aborted.
+  rpc TakeJob(stream google.protobuf.Empty) returns (Job);
+
+  rpc PopInput(StreamId) returns (Input);
+
   rpc PutOutput(PutOutputRequest) returns (google.protobuf.Empty);
   rpc CloseOutput(StreamId) returns (google.protobuf.Empty);
-  rpc Panic(PanicRequest) returns (google.protobuf.Empty);
 
-  // This rpc will return when the job is terminated. Executors start a call to this
-  // function before processing. If this call returns, the job has been cancelled.
-  // The executor should gracefully stop processing the job.
+  rpc Panic(PanicRequest) returns (google.protobuf.Empty);
+  rpc ReportHealthyUntil(ReportHealthyUntilRequest)
+      returns (google.protobuf.Empty);
+
+  // This rpc will return when the job is terminated. Executors start a call to
+  // this function before processing. If this call returns, the job has been
+  // cancelled. The executor should gracefully stop processing the job.
   rpc WaitForStop(Job) returns (google.protobuf.Empty);
 }
 
-message InputStreamElement { bytes mess = 1; }
+message Input {
+  oneof mess {
+    bytes some = 1;
+    google.protobuf.Empty end = 2;
+  }
+}
 
 message Job { uint64 id = 1; }
 
@@ -36,4 +54,9 @@ message PutOutputRequest {
 message PanicRequest {
   uint64 job = 1;
   string mess = 2;
+}
+
+message ReportHealthyUntilRequest {
+  uint64 job = 1;
+  google.protobuf.Timestamp healthy_until = 2;
 }

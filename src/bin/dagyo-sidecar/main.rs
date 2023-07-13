@@ -1,18 +1,22 @@
+use std::collections::HashMap;
 use std::env;
+use std::sync::atomic::{self, AtomicBool};
+use std::sync::Arc;
 
-use dagyo::flow::JobDesc;
+use anyhow::{anyhow as ah, Context};
+use dagyo::flow::{JobDesc, MailBox};
 use dashmap::DashMap;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
+use lapin::options::{BasicGetOptions, QueueDeclareOptions};
 use lapin::{
     message::Delivery,
     options::{BasicConsumeOptions, BasicQosOptions},
     types::FieldTable,
 };
-use prost_types::Timestamp;
 use proto::{
-    dagyo_sidecar_server::DagyoSidecarServer, InputStreamElement, PanicRequest, PutOutputRequest,
-    StreamId,
+    dagyo_sidecar_server::DagyoSidecarServer, Input, PanicRequest, PutOutputRequest, StreamId,
 };
+use tokio::sync::Mutex as Tutex;
 use tonic::{Request, Response, Status, Streaming};
 
 pub mod proto {
@@ -20,26 +24,158 @@ pub mod proto {
 }
 
 struct InputStream {
-    queue_name: String,
-    channel: lapin::Channel,
+    consumer: Arc<lapin::Channel>,
+    queue: lapin::Queue,
+    done: AtomicBool,
+}
+
+impl InputStream {
+    async fn from_mailbox(channel: &lapin::Channel, mailbox: MailBox) -> anyhow::Result<Self> {
+        unimplemented!()
+    }
+
+    async fn next(&self) -> anyhow::Result<Option<Vec<u8>>> {
+        if self.done.load(atomic::Ordering::SeqCst) {
+            return Ok(None);
+        }
+
+        let delivery: Delivery = self
+            .consumer
+            .basic_get(self.queue.name().as_str(), BasicGetOptions { no_ack: true })
+            .await?
+            .ok_or_else(|| ah!("Input stream ended without explicit close message."))?
+            .delivery;
+
+        // The single byte message [0x01] is the the explicit end-of-stream marker.
+        // [0x00, ..body] is a valid message.
+        // Any other message is invalid.
+        match delivery.data.as_slice() {
+            [0x01] => {
+                self.done.store(true, atomic::Ordering::SeqCst);
+                Ok(None)
+            }
+            [0x00, ..] => {
+                let mut body = delivery.data;
+                body.remove(0);
+                Ok(Some(body))
+            }
+            [] => Err(ah!("Input stream got an invalid message; no prefix.")),
+            _ => Err(ah!(
+                "Input stream got an invalid message; unrecognized prefix."
+            )),
+        }
+    }
 }
 
 struct OutputStream {
-    queue_name: String,
-    channel: lapin::Channel,
+    channel: Arc<lapin::Channel>,
+    queue: lapin::Queue,
+    done: AtomicBool,
+}
+
+impl OutputStream {
+    async fn from_mailbox(channel: Arc<lapin::Channel>, mailbox: MailBox) -> anyhow::Result<Self> {
+        let queue_name = mailbox.queue_name();
+
+        // assert the queue exists using passive declare
+        let queue = channel
+            .queue_declare(
+                &queue_name,
+                QueueDeclareOptions {
+                    passive: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await?;
+
+        Ok(Self {
+            channel,
+            queue,
+            done: AtomicBool::new(false),
+        })
+    }
+
+    async fn close(&self) -> anyhow::Result<()> {
+        if self.done.load(atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        self.channel
+            .basic_publish(
+                "",
+                self.queue.name().as_str(),
+                Default::default(),
+                &[0x01],
+                Default::default(),
+            )
+            .await?;
+
+        self.done.store(true, atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn send(&self, message: Vec<u8>) -> anyhow::Result<()> {
+        if self.done.load(atomic::Ordering::SeqCst) {
+            return Err(ah!("Output stream is closed."));
+        }
+
+        let mut payload = message;
+        payload.insert(0, 0x00);
+
+        self.channel
+            .basic_publish(
+                "",
+                self.queue.name().as_str(),
+                Default::default(),
+                &payload,
+                Default::default(),
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 struct Job {
-    inputs: DashMap<String, InputStream>,
-    outputs: DashMap<String, OutputStream>,
+    inputs: HashMap<String, InputStream>,
+    outputs: HashMap<String, OutputStream>,
     panic: OutputStream,
     health: OutputStream,
     stop: InputStream,
 }
 
+impl Job {
+    async fn connect(channel: Arc<lapin::Channel>, desc: JobDesc) -> anyhow::Result<Self> {
+        let mut inputs = HashMap::new();
+        for (k, v) in desc.inputs {
+            let stream = InputStream::from_mailbox(&channel, v).await?;
+            inputs.insert(k, stream);
+        }
+
+        let mut outputs = HashMap::new();
+        for (k, v) in desc.outputs {
+            let stream = OutputStream::from_mailbox(Arc::clone(&channel), v).await?;
+            outputs.insert(k, stream);
+        }
+
+        let stop = InputStream::from_mailbox(&channel, desc.stop).await?;
+        let panic = OutputStream::from_mailbox(Arc::clone(&channel), desc.panic).await?;
+        let health = OutputStream::from_mailbox(channel, desc.health).await?;
+
+        Ok(Self {
+            inputs,
+            outputs,
+            panic,
+            health,
+            stop,
+        })
+    }
+}
+
 pub struct Sidecar {
-    message_broker: lapin::Connection,
-    job_queue: tokio::sync::Mutex<lapin::Consumer>,
+    message_broker: Arc<lapin::Channel>,
+    job_queue: Tutex<lapin::Consumer>,
     jobs: DashMap<u64, Job>,
 }
 
@@ -57,8 +193,8 @@ impl Sidecar {
 
         let job_queue_name = env::var("DAGYO_QUEUE")?;
         let amqp_url = env::var("AMQP_URL")?;
-        let message_broker = lapin::Connection::connect(&amqp_url, Default::default()).await?;
-        let channel = message_broker.create_channel().await?;
+        let connection = lapin::Connection::connect(&amqp_url, Default::default()).await?;
+        let channel = connection.create_channel().await?;
         channel.basic_qos(1, BasicQosOptions::default()).await?;
         let job_queue = channel
             .basic_consume(
@@ -69,47 +205,98 @@ impl Sidecar {
             )
             .await?;
         Ok(Self {
-            message_broker,
-            job_queue: tokio::sync::Mutex::new(job_queue),
+            message_broker: Arc::new(channel),
+            job_queue: Tutex::new(job_queue),
             jobs: DashMap::new(),
         })
+    }
+
+    pub async fn close_job(&self, job_id: u64) -> anyhow::Result<()> {
+        let job = self
+            .jobs
+            .remove(&job_id)
+            .ok_or_else(|| anyhow::anyhow!("Tried to close a non-existent job."))?
+            .1;
+
+        // If any stream remains unterminated, thats an error. Panic the job.
+        let mut unterminated_inputs = Vec::new();
+        for (name, stream) in job.inputs {
+            if stream.done.load(atomic::Ordering::SeqCst) {
+                unterminated_inputs.push(name);
+            }
+        }
+
+        let mut unterminated_outputs = Vec::new();
+        for (name, stream) in job.outputs {
+            if !stream.done.load(atomic::Ordering::SeqCst) {
+                unterminated_outputs.push(name);
+            }
+        }
+
+        if !unterminated_inputs.is_empty() || !unterminated_outputs.is_empty() {
+            let message = format!(
+                "Job was closed despite unterminated streams.\n  Intput: {:?}\n  Output: {:?}\n",
+                unterminated_inputs, unterminated_outputs,
+            );
+            job.panic.send(message.into()).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn receive_job_description(&self) -> anyhow::Result<JobDesc> {
+        let job: Option<lapin::Result<_>> = self.job_queue.lock().await.next().await;
+        let job: lapin::Result<_> = job.ok_or_else(|| anyhow::anyhow!("Queue was empty."))?;
+        let job: Delivery = job.map_err(Into::<anyhow::Error>::into)?;
+        let job = serde_json::from_slice(&job.data)?;
+        Ok(job)
     }
 }
 
 #[tonic::async_trait]
-impl proto::dagyo_sidecar_server::DagyoSidecar for Sidecar {
-    type GetInputStreamStream =
-        Box<dyn Stream<Item = Result<InputStreamElement, Status>> + Send + 'static + Unpin>;
-
+impl proto::dagyo_sidecar_server::DagyoSidecar for Arc<Sidecar> {
     async fn take_job(
         &self,
-        request: Request<Streaming<Timestamp>>,
+        request: Request<Streaming<()>>,
     ) -> Result<Response<proto::Job>, Status> {
-        let raw_job: Delivery = self
-            .job_queue
-            .lock()
+        let job_description = self
+            .receive_job_description()
             .await
-            .next()
+            .context("popping a job from the queue")
+            .map_err(report)?;
+
+        let job = Job::connect(Arc::clone(&self.message_broker), job_description)
             .await
-            .ok_or_else(|| Status::new(tonic::Code::Internal, "No job available"))?
-            .map_err(|e| {
-                Status::new(
-                    tonic::Code::Internal,
-                    format!("Failed to get job from queue: {}", e),
-                )
-            })?;
+            .context("linking job inputs and outputs to message broker streams")
+            .map_err(report)?;
 
-        let desc: JobDesc = serde_json::from_slice(&raw_job.data)
-            .map_err(|e| Status::new(tonic::Code::Internal, "Failed to parse job description"))?;
+        let job_id = rand::random::<u64>();
+        let existing = self.jobs.insert(job_id, job);
+        assert!(
+            existing.is_none(),
+            "Generated key already exists. Consider buying a lottery ticket.",
+        );
 
-        unimplemented!()
-    }
+        // When the request stream is dropped, the job is done. Time to clean up.
+        let self_ref = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut stream = request.into_inner();
+            loop {
+                match stream.next().await {
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        tracing::error!("Failed to read from request stream: {}", e);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            self_ref.close_job(job_id).await.unwrap_or_else(|e| {
+                tracing::error!("Failed to close job: {}", e);
+            });
+        });
 
-    async fn get_input_stream(
-        &self,
-        request: Request<StreamId>,
-    ) -> Result<Response<Self::GetInputStreamStream>, Status> {
-        unimplemented!()
+        Ok(Response::new(proto::Job { id: job_id }))
     }
 
     async fn put_output(&self, request: Request<PutOutputRequest>) -> Result<Response<()>, Status> {
@@ -124,9 +311,40 @@ impl proto::dagyo_sidecar_server::DagyoSidecar for Sidecar {
         unimplemented!()
     }
 
+    async fn report_healthy_until(
+        &self,
+        request: Request<proto::ReportHealthyUntilRequest>,
+    ) -> Result<Response<()>, Status> {
+        unimplemented!()
+    }
+
     async fn wait_for_stop(&self, request: Request<proto::Job>) -> Result<Response<()>, Status> {
         unimplemented!()
     }
+
+    async fn pop_input(&self, request: Request<StreamId>) -> Result<Response<Input>, Status> {
+        let request = request.into_inner();
+
+        let job = self
+            .jobs
+            .get(&request.job)
+            .ok_or_else(|| report(ah!("Tried to get input stream for non-existent job.")))?;
+
+        let input_stream = job
+            .inputs
+            .get(&request.name)
+            .ok_or_else(|| report(ah!("Tried to get non-existent input stream.")))?;
+
+        let next: Option<Vec<u8>> = input_stream.next().await.map_err(report)?;
+        // let mess = next.map(|some| Mess { some });
+        // Ok(Response::new(Input { mess }))
+        umimplemented!()
+    }
+}
+
+fn report(err: anyhow::Error) -> Status {
+    tracing::error!("Error: {}", err);
+    Status::new(tonic::Code::Internal, err.to_string())
 }
 
 #[tokio::main]
@@ -134,7 +352,7 @@ async fn main() -> anyhow::Result<()> {
     let host = "[::1]:50051".parse()?;
     let sidecar = Sidecar::init().await?;
     tonic::transport::Server::builder()
-        .add_service(DagyoSidecarServer::new(sidecar))
+        .add_service(DagyoSidecarServer::new(Arc::new(sidecar)))
         .serve(host)
         .await?;
     Ok(())
