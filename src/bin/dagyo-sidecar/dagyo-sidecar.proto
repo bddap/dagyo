@@ -32,10 +32,7 @@ service DagyoSidecar {
 }
 
 message Input {
-  oneof mess {
-    bytes some = 1;
-    google.protobuf.Empty end = 2;
-  }
+  oneof data { bytes next = 1; }
 }
 
 message Job { uint64 id = 1; }

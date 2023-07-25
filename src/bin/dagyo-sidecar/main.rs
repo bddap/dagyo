@@ -13,8 +13,11 @@ use lapin::{
     options::{BasicConsumeOptions, BasicQosOptions},
     types::FieldTable,
 };
+use prost_types::Timestamp;
+use proto::ReportHealthyUntilRequest;
 use proto::{
-    dagyo_sidecar_server::DagyoSidecarServer, Input, PanicRequest, PutOutputRequest, StreamId,
+    dagyo_sidecar_server::DagyoSidecarServer, input::Data, Input, PanicRequest, PutOutputRequest,
+    StreamId,
 };
 use tokio::sync::Mutex as Tutex;
 use tonic::{Request, Response, Status, Streaming};
@@ -29,9 +32,48 @@ struct InputStream {
     done: AtomicBool,
 }
 
+struct OutputStream {
+    channel: Arc<lapin::Channel>,
+    queue: lapin::Queue,
+    done: AtomicBool,
+}
+
+struct Job {
+    inputs: HashMap<String, InputStream>,
+    outputs: HashMap<String, OutputStream>,
+    panic: OutputStream,
+    health: OutputStream,
+    stop: InputStream,
+}
+
+pub struct Sidecar {
+    message_broker: Arc<lapin::Channel>,
+    job_queue: Tutex<lapin::Consumer>,
+    jobs: DashMap<u64, Job>,
+}
+
 impl InputStream {
-    async fn from_mailbox(channel: &lapin::Channel, mailbox: MailBox) -> anyhow::Result<Self> {
-        unimplemented!()
+    async fn from_mailbox(channel: Arc<lapin::Channel>, mailbox: MailBox) -> anyhow::Result<Self> {
+        let queue_name = mailbox.queue_name();
+
+        // assert the queue exists using passive declare
+        let queue = channel
+            .queue_declare(
+                &queue_name,
+                QueueDeclareOptions {
+                    passive: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await?;
+
+        let ret = Self {
+            consumer: channel,
+            queue,
+            done: AtomicBool::new(false),
+        };
+        Ok(ret)
     }
 
     async fn next(&self) -> anyhow::Result<Option<Vec<u8>>> {
@@ -65,12 +107,6 @@ impl InputStream {
             )),
         }
     }
-}
-
-struct OutputStream {
-    channel: Arc<lapin::Channel>,
-    queue: lapin::Queue,
-    done: AtomicBool,
 }
 
 impl OutputStream {
@@ -137,19 +173,11 @@ impl OutputStream {
     }
 }
 
-struct Job {
-    inputs: HashMap<String, InputStream>,
-    outputs: HashMap<String, OutputStream>,
-    panic: OutputStream,
-    health: OutputStream,
-    stop: InputStream,
-}
-
 impl Job {
     async fn connect(channel: Arc<lapin::Channel>, desc: JobDesc) -> anyhow::Result<Self> {
         let mut inputs = HashMap::new();
         for (k, v) in desc.inputs {
-            let stream = InputStream::from_mailbox(&channel, v).await?;
+            let stream = InputStream::from_mailbox(channel.clone(), v).await?;
             inputs.insert(k, stream);
         }
 
@@ -159,7 +187,7 @@ impl Job {
             outputs.insert(k, stream);
         }
 
-        let stop = InputStream::from_mailbox(&channel, desc.stop).await?;
+        let stop = InputStream::from_mailbox(channel.clone(), desc.stop).await?;
         let panic = OutputStream::from_mailbox(Arc::clone(&channel), desc.panic).await?;
         let health = OutputStream::from_mailbox(channel, desc.health).await?;
 
@@ -171,12 +199,6 @@ impl Job {
             stop,
         })
     }
-}
-
-pub struct Sidecar {
-    message_broker: Arc<lapin::Channel>,
-    job_queue: Tutex<lapin::Consumer>,
-    jobs: DashMap<u64, Job>,
 }
 
 impl Sidecar {
@@ -300,26 +322,82 @@ impl proto::dagyo_sidecar_server::DagyoSidecar for Arc<Sidecar> {
     }
 
     async fn put_output(&self, request: Request<PutOutputRequest>) -> Result<Response<()>, Status> {
-        unimplemented!()
+        let PutOutputRequest { job, name, mess } = request.into_inner();
+        self.jobs
+            .get(&job)
+            .ok_or_else(|| report(ah!("Tried to put output on non-existent job.")))?
+            .outputs
+            .get(&name)
+            .ok_or_else(|| report(ah!("Tried to put output on non-existent stream.")))?
+            .send(mess)
+            .await
+            .map_err(report)?;
+        Ok(Response::new(()))
     }
 
     async fn close_output(&self, request: Request<StreamId>) -> Result<Response<()>, Status> {
-        unimplemented!()
+        let request = request.into_inner();
+
+        let job = self
+            .jobs
+            .get(&request.job)
+            .ok_or_else(|| report(ah!("Tried to close output stream for non-existent job.")))?;
+
+        let stream = job
+            .outputs
+            .get(&request.name)
+            .ok_or_else(|| report(ah!("Tried to close non-existent output stream.")))?;
+
+        stream.close().await.map_err(report)?;
+
+        Ok(Response::new(()))
     }
 
     async fn panic(&self, request: Request<PanicRequest>) -> Result<Response<()>, Status> {
-        unimplemented!()
+        let PanicRequest { job, mess } = request.into_inner();
+        self.jobs
+            .get(&job)
+            .ok_or_else(|| report(ah!("Tried to panic non-existent job.")))?
+            .panic
+            .send(mess.into())
+            .await
+            .map_err(report)?;
+        Ok(Response::new(()))
     }
 
     async fn report_healthy_until(
         &self,
-        request: Request<proto::ReportHealthyUntilRequest>,
+        request: Request<ReportHealthyUntilRequest>,
     ) -> Result<Response<()>, Status> {
-        unimplemented!()
+        let ReportHealthyUntilRequest { job, healthy_until } = request.into_inner();
+
+        let healthy_until: Timestamp = healthy_until.ok_or_else(|| {
+            Status::invalid_argument("Tried to report healthy until without a timestamp.")
+        })?;
+        let healthy_until_millis = milliseconds(healthy_until)
+            .map_err(|_| Status::invalid_argument("Timestamp out of range."))?;
+
+        self.jobs
+            .get(&job)
+            .ok_or_else(|| report(ah!("Tried to report health for non-existent job.")))?
+            .health
+            .send(format!("{}", healthy_until_millis).into())
+            .await
+            .map_err(report)?;
+
+        Ok(Response::new(()))
     }
 
     async fn wait_for_stop(&self, request: Request<proto::Job>) -> Result<Response<()>, Status> {
-        unimplemented!()
+        let job = request.into_inner().id;
+        self.jobs
+            .get(&job)
+            .ok_or_else(|| report(ah!("Tried to wait for non-existent job.")))?
+            .stop
+            .next()
+            .await
+            .map_err(report)?;
+        Ok(Response::new(()))
     }
 
     async fn pop_input(&self, request: Request<StreamId>) -> Result<Response<Input>, Status> {
@@ -335,16 +413,21 @@ impl proto::dagyo_sidecar_server::DagyoSidecar for Arc<Sidecar> {
             .get(&request.name)
             .ok_or_else(|| report(ah!("Tried to get non-existent input stream.")))?;
 
-        let next: Option<Vec<u8>> = input_stream.next().await.map_err(report)?;
-        // let mess = next.map(|some| Mess { some });
-        // Ok(Response::new(Input { mess }))
-        umimplemented!()
+        let data: Option<Vec<u8>> = input_stream.next().await.map_err(report)?;
+        let data: Option<Data> = data.map(Data::Next);
+        Ok(Response::new(Input { data }))
     }
 }
 
 fn report(err: anyhow::Error) -> Status {
     tracing::error!("Error: {}", err);
     Status::new(tonic::Code::Internal, err.to_string())
+}
+
+fn milliseconds(time: Timestamp) -> anyhow::Result<u128> {
+    let ret: i128 =
+        Into::<i128>::into(time.seconds) + 1000 + Into::<i128>::into(time.nanos) / 1_000_000;
+    ret.try_into().map_err(|_| ah!("Timestamp out of range."))
 }
 
 #[tokio::main]
