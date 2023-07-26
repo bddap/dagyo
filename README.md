@@ -75,10 +75,6 @@ When an deserialization error occurs, the dagyo executor should fail the job imm
 
 https://blog.containerize.com/2021/07/09/top-5-open-source-message-queue-software-in-2021/
 
-# Plans to Publish This Repository
-
-Dagyo protocol and scheduler should be open sourced under the a permissive license. Need to get formal permission for this.
-This repo will contain example dagyo programs, but nothing specific to Postera.
 
 # Why not X tool?
 
@@ -218,3 +214,19 @@ too much burden on progdef implementers.
 - [ ] Internally consistent and precise vocabulary for describing parts of dagyo e.g. program vs. procedure.
 - [ ] Ensure progdefs that crash without panicking do always cause the flow to panic.
 
+## License
+
+Licensed under either of
+
+ * Apache License, Version 2.0
+   ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license
+   ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+## Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
