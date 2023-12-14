@@ -1,8 +1,7 @@
-# this dockerfile can build any of the cargo binary targets in this workspace
-# just set BIN to the name of the binary you want to build
+FROM rust:1.74-alpine as builder
+WORKDIR /usr/src/app
 
-FROM rust:alpine as builder
-RUN apk add --no-cache musl-dev
+RUN apk add --no-cache musl-dev protobuf-dev
 
 # build just dependencies first to cache them
 COPY Cargo.toml Cargo.lock ./
@@ -13,5 +12,5 @@ RUN cargo build --release --all-targets
 
 FROM alpine
 ARG BIN
-COPY --from=builder /target/release/$BIN /usr/local/bin/entrypoint
+COPY --from=builder /usr/src/app/target/release/$BIN /usr/local/bin/entrypoint
 CMD ["entrypoint"]
