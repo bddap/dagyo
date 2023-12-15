@@ -1,0 +1,142 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dagyo-default
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dagyo-operator-service-account
+  namespace: dagyo-default
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dagyoclusters.dagyo.dagyo
+spec:
+  group: dagyo.dagyo
+  names:
+    categories: []
+    kind: DagyoCluster
+    plural: dagyoclusters
+    shortNames: []
+    singular: dagyocluster
+  scope: Namespaced
+  versions:
+    - additionalPrinterColumns: []
+      name: v1
+      schema:
+        openAPIV3Schema:
+          description: Auto-generated derived type for ClusterConfig via `CustomResource`
+          properties:
+            spec:
+              properties:
+                executors:
+                  additionalProperties:
+                    properties:
+                      image:
+                        type: string
+                      inputs:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      outputs:
+                        additionalProperties:
+                          type: string
+                        type: object
+                    required:
+                      - image
+                      - inputs
+                      - outputs
+                    type: object
+                  type: object
+                sidecar_image:
+                  type: string
+              required:
+                - executors
+                - sidecar_image
+              type: object
+          required:
+            - spec
+          title: DagyoCluster
+          type: object
+      served: true
+      storage: true
+      subresources: {}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dagyo-operator-role
+  namespace: dagyo-default
+rules:
+  # TODO, these rules can be split up to be more fine grained
+  - apiGroups:
+      - ""
+      - "dagyo.dagyo"
+    resources:
+      - "pods"
+      - "configmaps"
+      - "dagyoclusters"
+    verbs:
+      - "get"
+      - "list"
+      - "watch"
+      - "create"
+      - "update"
+      - "patch"
+      - "delete"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dagyo-operator-deployment
+  namespace: dagyo-default
+spec:
+  selector:
+    matchLabels:
+      app: dagyo-operator-pod
+  template:
+    metadata:
+      labels:
+        app: dagyo-operator-pod
+    spec:
+      serviceAccountName: dagyo-operator-service-account
+      containers:
+        - name: dagyo-operator-container
+          image: dagyo-operator
+          imagePullPolicy: IfNotPresent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dagyo-operator-role-binding
+  namespace: dagyo-default
+roleRef:
+  kind: Role
+  name: dagyo-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: dagyo-operator-service-account
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dagyo-scheduler-deployment
+  namespace: dagyo-default
+spec:
+  selector:
+    matchLabels:
+      app: dagyo-scheduler
+  template:
+    metadata:
+      labels:
+        app: dagyo-scheduler
+    spec:
+      serviceAccountName: dagyo-scheduler
+      containers:
+        - name: dagyo-scheduler
+          image: dagyo-scheduler
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80

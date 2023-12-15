@@ -14,12 +14,12 @@ use petgraph::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::vertspec::{Progdef, Progname};
+use crate::vertspec::{ProgName, Progdef};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// The serializable representation of a procedure.
 pub struct Proc {
-    pub nodes: Vec<Progname>,
+    pub nodes: Vec<ProgName>,
 
     /// Which output is connected to which input
     /// the structure of the graph is validated later,
@@ -32,7 +32,7 @@ impl Proc {
         let mut graph = DiGraph::new();
         let mut idxes = HashMap::new();
 
-        let progdefs: HashMap<Progname, Progdef> = progdefs
+        let progdefs: HashMap<String, Progdef> = progdefs
             .iter()
             .map(|progdef| (progdef.name.clone(), progdef.clone()))
             .collect();
@@ -226,7 +226,7 @@ impl WithPipes {
 #[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq, Debug, Copy)]
 /// Adress for executors to push xor pull from.
 #[serde(transparent)]
-struct MailBox {
+pub struct MailBox {
     addr: Uuid,
 }
 
@@ -237,18 +237,18 @@ impl MailBox {
         }
     }
 
-    fn queue_name(&self) -> String {
+    pub fn queue_name(&self) -> String {
         self.addr.to_string()
     }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct JobDesc {
-    inputs: HashMap<String, MailBox>,
-    outputs: HashMap<String, MailBox>,
-    panic: MailBox,
-    health: MailBox,
-    stop: MailBox,
+    pub inputs: HashMap<String, MailBox>,
+    pub outputs: HashMap<String, MailBox>,
+    pub panic: MailBox,
+    pub health: MailBox,
+    pub stop: MailBox,
 }
 
 pub struct Flow {

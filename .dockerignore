@@ -1,0 +1,7 @@
+/target
+/tmp
+/sample-progdefs
+/all.dockerfile
+/justfile
+/k8s-manifest.yaml
+

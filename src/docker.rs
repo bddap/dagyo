@@ -1,15 +1,12 @@
-use std::process::{Command, Stdio};
+use std::{collections::HashMap, process::Command};
 
 use anyhow::{ensure, Context};
-use tracing::info;
+use sha2::{Digest, Sha256};
 
-use crate::{
-    config::Opts,
-    vertspec::{ProgdefDesc, VertSpec},
-};
+use crate::{common::Executor, vertspec::VertSpec};
 
 /// build docker image and upload to the appropriate registry
-pub async fn build_docker_image(vs: VertSpec, opt: &Opts) -> anyhow::Result<ProgdefDesc> {
+pub fn build_docker_image(vs: VertSpec) -> anyhow::Result<Executor> {
     let build_opt_flags: Vec<String> = vs
         .docker_build_args
         .iter()
@@ -31,40 +28,49 @@ pub async fn build_docker_image(vs: VertSpec, opt: &Opts) -> anyhow::Result<Prog
     );
 
     let image_content_id = String::from_utf8(out.stdout)
-        .context("docker did not output non-utf8")?
+        .context("docker did output non-utf8")?
         .trim()
         .to_string();
 
-    let ret = vs.docker_tag(&image_content_id)?;
-    let tag = ret.image_name();
+    let name = format!("vert_{}", shorthex(hash(&vs, &image_content_id)));
 
     let res = Command::new("docker")
         .arg("tag")
         .arg(&image_content_id)
-        .arg(&tag)
+        .arg(&name)
         .status()?;
     ensure!(res.success(), "docker tag failed");
 
-    if opt.local {
-        let out = Command::new("minikube")
-            .arg("image")
-            .arg("ls")
-            .stdout(Stdio::piped())
-            .output()?;
-        let current_images = String::from_utf8(out.stdout)?;
-        if current_images.contains(&tag) {
-            info!("image {} already loaded", tag);
-        } else {
-            info!("loading image: {}", tag);
-            Command::new("minikube")
-                .arg("image")
-                .arg("load")
-                .arg(&tag)
-                .output()?;
-        }
-    } else {
-        unimplemented!("this program can't yet upload to remote registry");
-    }
+    Ok(Executor {
+        image: name,
+        inputs: vs.inputs,
+        outputs: vs.outputs,
+    })
+}
 
-    Ok(ret)
+fn hash(vertspec: &VertSpec, image_hash: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(stable_map_hash(&vertspec.docker_build_args));
+    hasher.update(stable_map_hash(&vertspec.inputs));
+    hasher.update(stable_map_hash(&vertspec.outputs));
+    hasher.update(image_hash.as_bytes());
+    hasher.finalize().into()
+}
+
+/// hash where if map a == map b then hash a == hash b, this ensures that keys are sorted
+fn stable_map_hash(map: &HashMap<String, String>) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    let mut keys: Vec<(&str, &str)> = map.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    keys.sort();
+    let js = serde_json::to_vec(&keys).unwrap();
+    hasher.update(js);
+    hasher.finalize().into()
+}
+
+pub fn shorthex(bytes: [u8; 32]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .take(16)
+        .collect()
 }
